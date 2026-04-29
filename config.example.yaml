@@ -1,0 +1,49 @@
+# Investment Copilot — example configuration.
+# Copy to `config.yaml` and adjust. Real secrets live in `.env`.
+
+providers:
+  market_data: stooq            # only "stooq" supported in v1
+  news:                         # ordered list; each provider is queried
+    - stooq
+    - rss
+  fundamentals: none            # "alpha_vantage" or "none"
+  rss_feeds:
+    - https://www.bankier.pl/rss/wiadomosci.xml
+    - https://www.money.pl/rss/
+  # newsapi_api_key: ${NEWSAPI_KEY}
+  # alpha_vantage_api_key: ${ALPHA_VANTAGE_KEY}
+
+storage:
+  sqlite_path: data/cache.db
+  parquet_dir: data/ohlcv
+
+portfolio:
+  path: portfolio.yaml
+
+strategies:
+  ma_crossover:
+    fast: 50
+    slow: 200
+  momentum:
+    lookback: 126
+    threshold: 0.0
+
+backtest:
+  start_date: 2020-01-01
+  # end_date: 2025-12-31        # optional; omit to use latest available
+  benchmark: wig20
+  initial_capital: 100000
+  trading_days_per_year: 252
+
+llm:
+  provider: groq
+  api_key: ${GROQ_API_KEY}
+  model_analysis: llama-3.3-70b-versatile
+  model_summary: llama-3.1-8b-instant
+  language: pl                  # output language for AI artifacts
+  temperature: 0.3
+  max_tokens: 2048
+  request_timeout_s: 60
+
+logging:
+  level: INFO

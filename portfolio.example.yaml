@@ -1,0 +1,46 @@
+# Investment Copilot — example portfolio.
+#
+# Tickers use Stooq convention (lowercase + ".pl"). Variants like "PKN" or
+# "PKN.WA" are normalized automatically.
+#
+# Optional per holding:
+#   * name      — display name shown in reports.
+#   * keywords  — substrings used to filter RSS news. Defaults to the ticker
+#                 stem (e.g. "PKN") which often misses news that uses brand
+#                 names ("Orlen"). Set keywords explicitly for best matching.
+#
+# `entry_price` and `entry_date` drive live PnL tracking only. The backtester
+# ignores them and runs strategies from `backtest.start_date` in config.yaml.
+
+base_currency: PLN
+
+holdings:
+  - ticker: pkn.pl
+    name: PKN Orlen
+    shares: 100
+    entry_price: 65.40
+    entry_date: 2023-04-12
+    keywords: [Orlen, PKN]
+    thesis: |
+      Integrated energy & refining champion. Dividend policy + Orlen-Lotos
+      synergies. Risk: regulated prices, political exposure.
+
+  - ticker: cdr.pl
+    name: CD Projekt
+    shares: 25
+    entry_price: 142.10
+    entry_date: 2024-01-08
+    keywords: [CD Projekt, CDR, Cyberpunk, Witcher]
+    thesis: |
+      Long-cycle IP holder (Witcher, Cyberpunk). Pipeline visibility through
+      the next flagship release. Risk: execution and release-window slippage.
+
+  - ticker: pko.pl
+    name: PKO BP
+    shares: 200
+    entry_price: 48.20
+    entry_date: 2023-09-05
+    keywords: [PKO BP, "PKO Bank"]
+    thesis: |
+      Largest Polish bank, beneficiary of the rate cycle and improving CHF
+      mortgage provisioning. Risk: macro, regulatory dividend caps.
