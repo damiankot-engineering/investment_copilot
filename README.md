@@ -138,7 +138,7 @@ cd investment-copilot
 
 # with uv (recommended)
 uv sync                              # installs deps + dev extras into .venv
-uv pip install -e .                  # editable install of the package
+uv tool install --editable .         # editable install of the package
 
 # or with pip
 python -m venv .venv && source .venv/bin/activate
@@ -148,7 +148,7 @@ pip install -e ".[dev]"
 After install, the `invcopilot` command is available on `PATH`:
 
 ```bash
-invcopilot version
+uv run invcopilot version
 # investment-copilot 0.1.0
 ```
 
@@ -161,7 +161,7 @@ A local web GUI is available as an optional install. It's a thin layer over the 
 uv pip install -e ".[gui]"
 
 # run (opens http://localhost:8501)
-streamlit run streamlit_app.py
+uv run streamlit run streamlit_app.py
 ```
 
 The GUI gives you four tabs over the standard pipelines:
