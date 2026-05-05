@@ -291,6 +291,9 @@ def _render_backtest_panel(result: BacktestResult) -> None:
     # Equity curve chart
     df = equity_curves_dataframe(result)
     fig = go.Figure()
+    log_scale = st.checkbox("Log scale", value=True)
+    if log_scale == True:
+        df = df[df > 0]
     for col in df.columns:
         fig.add_trace(
             go.Scatter(x=df.index, y=df[col], mode="lines", name=col)
@@ -299,6 +302,7 @@ def _render_backtest_panel(result: BacktestResult) -> None:
         title="Equity curve",
         xaxis_title="Date",
         yaxis_title=f"Equity ({result.initial_capital:,.0f} initial)",
+        yaxis_type="log" if log_scale else "linear",
         height=420,
         legend=dict(orientation="h", y=-0.2),
         margin=dict(l=20, r=20, t=40, b=20),
