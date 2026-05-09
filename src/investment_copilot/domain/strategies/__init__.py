@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from investment_copilot.config.schema import StrategiesConfig
 from investment_copilot.domain.strategies.base import Strategy
+from investment_copilot.domain.strategies.buy_and_hold import BuyAndHold
 from investment_copilot.domain.strategies.ma_crossover import MACrossover
 from investment_copilot.domain.strategies.momentum import Momentum
 
 #: Names exposed via the CLI / API.
-KNOWN_STRATEGIES: tuple[str, ...] = ("ma_crossover", "momentum")
+KNOWN_STRATEGIES: tuple[str, ...] = ("ma_crossover", "momentum", "buy_and_hold")
 
 
 def make_strategy(name: str, config: StrategiesConfig) -> Strategy:
@@ -21,9 +22,11 @@ def make_strategy(name: str, config: StrategiesConfig) -> Strategy:
             lookback=config.momentum.lookback,
             threshold=config.momentum.threshold,
         )
+    if n == "buy_and_hold":
+        return BuyAndHold()
     raise ValueError(
         f"Unknown strategy: {name!r}. Known: {', '.join(KNOWN_STRATEGIES)}"
     )
 
 
-__all__ = ["KNOWN_STRATEGIES", "MACrossover", "Momentum", "Strategy", "make_strategy"]
+__all__ = ["KNOWN_STRATEGIES", "BuyAndHold", "MACrossover", "Momentum", "Strategy", "make_strategy"]

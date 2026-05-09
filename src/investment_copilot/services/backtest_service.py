@@ -66,6 +66,11 @@ class BacktestService:
         start_date = start or self._bt_cfg.start_date
         end_date = end or self._bt_cfg.end_date
 
+        # Calculate initial_capital from portfolio: sum of entry_price * shares
+        initial_capital = sum(
+            holding.entry_price * holding.shares for holding in portfolio.holdings
+        )
+
         panel = self._load_panel(
             tickers=portfolio.tickers,
             start=start_date,
@@ -84,7 +89,7 @@ class BacktestService:
         run = simulate_portfolio(
             panel,
             signals,
-            initial_capital=self._bt_cfg.initial_capital,
+            initial_capital=initial_capital,
             start=start_date,
             end=end_date,
         )
@@ -98,7 +103,7 @@ class BacktestService:
         bench_curve_points = []
         bench_metrics = None
         if include_benchmark:
-            bench_symbol, bench_equity = self._load_benchmark(start_date, end_date)
+            bench_symbol, bench_equity = self._load_benchmark(start_date, end_date, initial_capital)
             if bench_equity is not None and not bench_equity.empty:
                 bench_curve_points = equity_points(bench_equity)
                 bench_metrics = compute_metrics(
@@ -123,7 +128,7 @@ class BacktestService:
             strategy_params=self._strategy_params(strategy),
             start_date=actual_start,
             end_date=actual_end,
-            initial_capital=self._bt_cfg.initial_capital,
+            initial_capital=initial_capital,
             final_value=float(run.equity_curve.iloc[-1]),
             equity_curve=equity_curve_points,
             metrics=metrics,
@@ -161,6 +166,7 @@ class BacktestService:
         self,
         start: date,
         end: date | None,
+        initial_capital: float,
     ) -> tuple[str | None, pd.Series | None]:
         symbol = self._bt_cfg.benchmark
         df = self._data.load_benchmark(symbol, start=start, end=end)
@@ -169,7 +175,7 @@ class BacktestService:
         try:
             equity = benchmark_buy_and_hold(
                 df["close"],
-                initial_capital=self._bt_cfg.initial_capital,
+                initial_capital=initial_capital,
                 start=start,
                 end=end,
             )

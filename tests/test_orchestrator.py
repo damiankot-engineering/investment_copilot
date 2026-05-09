@@ -118,7 +118,7 @@ def _make_container(tmp_path: Path) -> tuple[ServiceContainer, FakeMarket, FakeN
     )
     portfolio = PortfolioService(data_service=data)
     bt_cfg = BacktestConfig(
-        start_date=date(2023, 6, 1), initial_capital=10_000.0, benchmark="wig20"
+        start_date=date(2023, 6, 1), benchmark="wig20"
     )
     backtest = BacktestService(
         data_service=data,

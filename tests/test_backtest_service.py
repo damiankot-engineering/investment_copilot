@@ -77,7 +77,6 @@ def _service(data: FakeData) -> BacktestService:
         data_service=data,
         backtest_config=BacktestConfig(
             start_date=date(2023, 6, 1),  # well inside the synthetic data
-            initial_capital=10_000.0,
             benchmark="wig20",
         ),
         strategies_config=StrategiesConfig(

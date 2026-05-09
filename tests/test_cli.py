@@ -53,7 +53,6 @@ def cli_env(tmp_path: Path, monkeypatch) -> dict:
               path: {portfolio_path}
             backtest:
               start_date: 2023-01-02
-              initial_capital: 10000
             llm:
               api_key: ${{GROQ_API_KEY}}
             """

@@ -93,9 +93,16 @@ class MomentumParams(BaseModel):
     threshold: float = 0.0        # minimum trailing return to trigger long
 
 
+class BuyAndHoldParams(BaseModel):
+    """Buy & Hold: hold all positions indefinitely. No parameters needed."""
+
+    pass
+
+
 class StrategiesConfig(BaseModel):
     ma_crossover: MACrossoverParams = MACrossoverParams()
     momentum: MomentumParams = MomentumParams()
+    buy_and_hold: BuyAndHoldParams = BuyAndHoldParams()
 
 
 # --- Backtest ----------------------------------------------------------------
@@ -105,7 +112,6 @@ class BacktestConfig(BaseModel):
     start_date: date = date(2020, 1, 1)
     end_date: date | None = None  # None means "up to latest available"
     benchmark: str = "wig20"
-    initial_capital: PositiveFloat = 100_000.0
     trading_days_per_year: PositiveInt = 252
 
 

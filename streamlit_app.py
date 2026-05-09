@@ -105,7 +105,7 @@ def _sidebar() -> tuple[str, str | None]:
     )
     portfolio_override = portfolio_override.strip() or None
 
-    if st.sidebar.button("🔄 Reload config", use_container_width=True):
+    if st.sidebar.button("🔄 Reload config", width='stretch'):
         _bootstrap.clear()
         st.session_state.clear()
         st.rerun()
@@ -132,7 +132,7 @@ def _view_portfolio(portfolio: Portfolio, orchestrator: Orchestrator) -> None:
 
     cols = st.columns([1, 1, 4])
     with cols[0]:
-        if st.button("🔄 Update data", use_container_width=True):
+        if st.button("🔄 Update data", width='stretch'):
             with st.spinner("Refreshing OHLCV + news…"):
                 try:
                     report = orchestrator.update_data(portfolio)
@@ -147,7 +147,7 @@ def _view_portfolio(portfolio: Portfolio, orchestrator: Orchestrator) -> None:
                     st.error(f"Refresh failed: {exc}")
 
     with cols[1]:
-        if st.button("📊 Compute status", use_container_width=True):
+        if st.button("📊 Compute status", width='stretch'):
             _set_state("last_status", None)  # force recompute below
 
     # Compute (or reuse) current status
@@ -193,7 +193,7 @@ def _render_status_panel(portfolio: Portfolio, status: PortfolioStatus) -> None:
     df = holdings_dataframe(portfolio, status)
     st.dataframe(
         df,
-        use_container_width=True,
+        width='stretch',
         hide_index=True,
         column_config={
             "Shares": st.column_config.NumberColumn(format="%.0f"),
@@ -227,18 +227,70 @@ def _render_refresh_warnings() -> None:
             st.warning(line)
 
 
+# --- Strategy descriptions ------------------------------------------------
+
+
+_STRATEGY_DESCRIPTIONS = {
+    "ma_crossover": (
+        "**Moving Average Crossover**  \n"
+        "Kupuje akcje gdy krótka średnia krocząca (SMA) przechodzi powyżej długiej średniej — "
+        "sygnał trendu wzrostowego (złoty krzyż). Sprzedaje przy przecięciu w dół.  \n"
+        "_Trend-following strategy. Skuteczna w rynkach z wyraźnym trendem._"
+    ),
+    "momentum": (
+        "**Time-Series Momentum**  \n"
+        "Kupuje akcje, które miały dodatni zwrot w ostatnich N dni (lookback period). "
+        "Każda akcja oceniana niezależnie na podstawie swojego historycznego zwrotu.  \n"
+        "_Momentum strategy. Polega na tym, że trendy się utrzymują w krótkim terminie._"
+    ),
+    "buy_and_hold": (
+        "**Buy & Hold**  \n"
+        "Kupuje wszystkie akcje portfela na pierwszym dniu i trzyma je przez cały okres backteste. "
+        "Brak rebalansowania ani sprzedaży — idealna strategia bazowa.  \n"
+        "_Passive buy-and-hold baseline. Punkt odniesienia dla aktywnych strategii._"
+    ),
+}
+
+
 # --- View: Backtest --------------------------------------------------------
 
 
 def _view_backtest(portfolio: Portfolio, orchestrator: Orchestrator) -> None:
     st.header("Backtest")
 
-    cols = st.columns([2, 1, 1])
+    cols = st.columns([2, 1, 1, 1])
     strategy = cols[0].selectbox(
-        "Strategy", options=list(KNOWN_STRATEGIES), index=0
+        "Strategy", 
+        options=list(KNOWN_STRATEGIES), 
+        index=2,
+        help="Wybierz strategię tradingową do przetestowania"
     )
-    include_bm = cols[1].checkbox("Include benchmark", value=True)
-    run = cols[2].button("▶ Run backtest", use_container_width=True)
+    start_date = cols[1].date_input(
+        "Start date",
+        value=orchestrator._container.config.backtest.start_date,
+        help="Backtest period start date"
+    )
+    include_bm = cols[2].checkbox("Include benchmark", value=True)
+    run = cols[3].button("▶ Run backtest", width='stretch')
+
+    # Display strategy description
+    if strategy in _STRATEGY_DESCRIPTIONS:
+        st.info(_STRATEGY_DESCRIPTIONS[strategy])
+
+    # Display current strategy parameters
+    strat_cfg = orchestrator._container.config.strategies
+    if strategy == "ma_crossover":
+        st.caption(
+            f"📊 Parameters: fast SMA = {strat_cfg.ma_crossover.fast} dni, "
+            f"slow SMA = {strat_cfg.ma_crossover.slow} dni"
+        )
+    elif strategy == "momentum":
+        st.caption(
+            f"📊 Parameters: lookback = {strat_cfg.momentum.lookback} dni, "
+            f"threshold = {strat_cfg.momentum.threshold:.1%}"
+        )
+    elif strategy == "buy_and_hold":
+        st.caption("📊 Parameters: brak (zawsze trzymaj wszystkie pozycje)")
 
     if run:
         with st.spinner(f"Running {strategy}…"):
@@ -246,6 +298,7 @@ def _view_backtest(portfolio: Portfolio, orchestrator: Orchestrator) -> None:
                 result = orchestrator.backtest(
                     portfolio,
                     strategy_name=strategy,
+                    start=start_date,
                     include_benchmark=include_bm,
                 )
                 _set_state("last_backtest", result)
@@ -290,24 +343,24 @@ def _render_backtest_panel(result: BacktestResult) -> None:
 
     # Equity curve chart
     df = equity_curves_dataframe(result)
+    # Convert to percentage returns: (value - initial_capital) / initial_capital * 100
+    df_pct = ((df - result.initial_capital) / result.initial_capital * 100)
+    
     fig = go.Figure()
-    log_scale = st.checkbox("Log scale", value=True)
-    if log_scale == True:
-        df = df[df > 0]
-    for col in df.columns:
+    
+    for col in df_pct.columns:
         fig.add_trace(
-            go.Scatter(x=df.index, y=df[col], mode="lines", name=col)
+            go.Scatter(x=df_pct.index, y=df_pct[col], mode="lines", name=col)
         )
     fig.update_layout(
-        title="Equity curve",
+        title="Equity curve (% return)",
         xaxis_title="Date",
-        yaxis_title=f"Equity ({result.initial_capital:,.0f} initial)",
-        yaxis_type="log" if log_scale else "linear",
+        yaxis_title="Return (%)",
         height=420,
         legend=dict(orientation="h", y=-0.2),
         margin=dict(l=20, r=20, t=40, b=20),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
     # Drawdown
     if "Strategy" in df.columns:
@@ -328,7 +381,7 @@ def _render_backtest_panel(result: BacktestResult) -> None:
             height=260,
             margin=dict(l=20, r=20, t=40, b=20),
         )
-        st.plotly_chart(dd_fig, use_container_width=True)
+        st.plotly_chart(dd_fig, width='stretch')
 
     # Detailed metrics table
     with st.expander("Detailed metrics", expanded=False):
@@ -362,7 +415,7 @@ def _render_backtest_panel(result: BacktestResult) -> None:
                 for label, s, b, p in rows
             ]
         )
-        st.dataframe(table, use_container_width=True, hide_index=True)
+        st.dataframe(table, width='stretch', hide_index=True)
 
 
 # --- View: AI Analysis -----------------------------------------------------
@@ -386,7 +439,7 @@ def _view_analysis(portfolio: Portfolio, orchestrator: Orchestrator) -> None:
         value=_get_state("last_backtest") is not None,
         disabled=_get_state("last_backtest") is None,
     )
-    run = cols[3].button("✨ Run analysis", use_container_width=True)
+    run = cols[3].button("✨ Run analysis", width='stretch')
 
     if run:
         backtest_for_context = _get_state("last_backtest") if use_backtest else None
@@ -478,7 +531,7 @@ def _view_reports(
         key="reports_news_days",
     )
     filename = cols[2].text_input("Filename (optional)", value="")
-    generate = cols[3].button("📄 Generate report", use_container_width=True)
+    generate = cols[3].button("📄 Generate report", width='stretch')
 
     if generate:
         with st.spinner("Generating Markdown report…"):
@@ -520,7 +573,7 @@ def _view_reports(
                 data=body,
                 file_name=selected.name,
                 mime="text/markdown",
-                use_container_width=True,
+                width='stretch',
             )
         with col_a:
             st.caption(f"Path: `{selected}`")
