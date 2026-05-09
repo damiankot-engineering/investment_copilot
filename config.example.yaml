@@ -27,10 +27,11 @@ strategies:
   momentum:
     lookback: 126
     threshold: 0.0
+  buy_and_hold: {}
 
 backtest:
-  start_date: 2020-01-01
-  # end_date: 2025-12-31        # optional; omit to use latest available
+  start_date: 2026-01-01
+  # end_date: 2026-12-31        # optional; omit to use latest available
   benchmark: wig20
   initial_capital: 100000
   trading_days_per_year: 252

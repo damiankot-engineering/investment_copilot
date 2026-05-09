@@ -93,9 +93,16 @@ class MomentumParams(BaseModel):
     threshold: float = 0.0        # minimum trailing return to trigger long
 
 
+class BuyAndHoldParams(BaseModel):
+    """Buy & Hold: hold all positions indefinitely. No parameters needed."""
+
+    pass
+
+
 class StrategiesConfig(BaseModel):
     ma_crossover: MACrossoverParams = MACrossoverParams()
     momentum: MomentumParams = MomentumParams()
+    buy_and_hold: BuyAndHoldParams = BuyAndHoldParams()
 
 
 # --- Backtest ----------------------------------------------------------------
