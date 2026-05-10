@@ -34,6 +34,10 @@ from investment_copilot.infrastructure.providers.base import ProviderError
 logger = logging.getLogger(__name__)
 
 
+class _NoDataError(Exception):
+    """Internal signal: Stooq returned 'no data' for a symbol candidate."""
+
+
 class StooqProvider:
     """Daily OHLCV via Stooq's CSV endpoint."""
 
@@ -96,8 +100,32 @@ class StooqProvider:
         # Stooq's authenticated endpoint requires d1 and d2 together; d1 alone
         # triggers a server-side DB error. Default d2 to today when not given.
         effective_end = end or date.today()
+
+        # Try the heuristic-stripped form first (e.g. pkn.pl → pkn), then fall
+        # back to the original symbol unchanged. The stripped form works for
+        # most GPW equities, but some instruments (notably ETFs/FIZ such as
+        # etfbdivpl.pl) are only resolvable when the .pl suffix is kept.
+        primary = self._to_stooq_symbol(symbol)
+        candidates: list[str] = [primary]
+        if symbol != primary:
+            candidates.append(symbol)
+
+        last_no_data: ProviderError | None = None
+        for stooq_s in candidates:
+            try:
+                return self._fetch_one(stooq_s, symbol, start, effective_end)
+            except _NoDataError as exc:
+                last_no_data = ProviderError(str(exc))
+                continue
+
+        assert last_no_data is not None
+        raise last_no_data
+
+    def _fetch_one(
+        self, stooq_s: str, symbol: str, start: date, effective_end: date
+    ) -> pd.DataFrame:
         params: dict[str, str] = {
-            "s": self._to_stooq_symbol(symbol),
+            "s": stooq_s,
             "d1": start.strftime("%Y%m%d"),
             "d2": effective_end.strftime("%Y%m%d"),
             "i": "d",
@@ -140,7 +168,7 @@ class StooqProvider:
         if first_lower.startswith("<"):
             raise ProviderError(f"Stooq returned an HTML error page for {symbol}")
         if first_lower.startswith("no data") or first_lower.startswith("brak"):
-            raise ProviderError(f"Stooq returned no data for {symbol}")
+            raise _NoDataError(f"Stooq returned no data for {symbol}")
         # PHP warnings/errors emitted when the API key is missing or invalid.
         if first_lower.startswith("warning:") or first_lower.startswith("error:"):
             snippet = stripped[:300].replace("\n", " ")

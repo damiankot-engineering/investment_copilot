@@ -17,6 +17,11 @@ from datetime import date
 from typing import Iterable, Sequence
 
 from investment_copilot.domain.backtest import BacktestResult
+from investment_copilot.domain.fundamentals import (
+    FundamentalsSnapshot,
+    MonitoringSnapshot,
+    is_earnings_related,
+)
 from investment_copilot.domain.models import NewsItem
 from investment_copilot.domain.portfolio import (
     Holding,
@@ -196,6 +201,168 @@ def build_portfolio_context(
             render_status(status),
             render_backtest(backtest),
             render_news(news),
+        ]
+    )
+
+
+def render_fundamentals(snapshots: Sequence[FundamentalsSnapshot]) -> str:
+    """Render the latest fundamentals panel for the prompt context."""
+    if not snapshots:
+        return "## Fundamentals\n_(brak danych — provider nie zwrócił snapshotów)_"
+
+    lines = [
+        "## Fundamentals",
+        "| Ticker | Nazwa | Cena | Mcap (PLN) | P/E | P/BV | EPS | Stopa dyw. | 52w (low–high) | Źródło |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---|---|",
+    ]
+    for s in snapshots:
+        mcap = f"{s.market_cap:,.0f}" if s.market_cap is not None else "—"
+        price = f"{s.last_price:.2f}" if s.last_price is not None else "—"
+        pe = f"{s.pe_ratio:.2f}" if s.pe_ratio is not None else "—"
+        pbv = f"{s.pbv_ratio:.2f}" if s.pbv_ratio is not None else "—"
+        eps = f"{s.eps:.2f}" if s.eps is not None else "—"
+        dy = f"{s.dividend_yield * 100:.2f}%" if s.dividend_yield is not None else "—"
+        if s.week52_low is not None and s.week52_high is not None:
+            band = f"{s.week52_low:.2f}–{s.week52_high:.2f}"
+        else:
+            band = "—"
+        name = (s.name or "—").replace("|", "/")
+        lines.append(
+            f"| {s.ticker} | {name} | {price} | {mcap} | {pe} | {pbv} | "
+            f"{eps} | {dy} | {band} | {s.source} |"
+        )
+    return "\n".join(lines)
+
+
+def render_news_with_espi_flag(
+    news: Sequence[NewsItem],
+    *,
+    per_ticker_limit: int = MAX_NEWS_PER_TICKER,
+    total_limit: int = MAX_NEWS_TOTAL,
+) -> str:
+    """Like :func:`render_news`, but flags ESPI/earnings titles with [ESPI]."""
+    if not news:
+        return "## Recent news\n_(brak ostatnich wiadomości w cache)_"
+
+    sorted_news = sorted(news, key=lambda n: n.published_at, reverse=True)
+    if per_ticker_limit:
+        kept: list[NewsItem] = []
+        seen: dict[str | None, int] = {}
+        for n in sorted_news:
+            key = n.ticker
+            count = seen.get(key, 0)
+            if count >= per_ticker_limit:
+                continue
+            kept.append(n)
+            seen[key] = count + 1
+            if len(kept) >= total_limit:
+                break
+        sorted_news = kept
+    else:
+        sorted_news = sorted_news[:total_limit]
+
+    lines = ["## Recent news (z flagą ESPI/earnings)"]
+    for n in sorted_news:
+        title = _one_liner(n.title, MAX_NEWS_TITLE_CHARS)
+        when = n.published_at.strftime("%Y-%m-%d")
+        ticker = f"[{n.ticker}] " if n.ticker else ""
+        flag = "[ESPI/earnings] " if is_earnings_related(n.title) else ""
+        lines.append(f"- {when} {ticker}{flag}{title}  ({n.source})")
+    return "\n".join(lines)
+
+
+def render_previous_snapshot(prev: MonitoringSnapshot | None) -> str:
+    """Render the previous monitoring snapshot for diff context.
+
+    Includes BOTH the previous fundamentals (so the LLM can compute deltas)
+    AND the previous LLM-generated narrative per ticker (so the LLM can
+    carry forward the analysis when fresh data is sparse).
+    """
+    if prev is None:
+        return (
+            "## Previous snapshot\n"
+            "_(brak — to pierwszy raport monitorujący. Pole 'change_*' "
+            "ustaw na null. Dla każdej pozycji rozwiń pełną tezę z sekcji "
+            "'Theses (full)' — opisz model biznesowy, znane historyczne "
+            "wyniki widoczne w newsach, kontekst branżowy.)_"
+        )
+    lines = [
+        "## Previous snapshot",
+        f"_Poprzedni raport: {prev.generated_at.strftime('%Y-%m-%d %H:%M UTC')}_",
+        "",
+        "### Fundamentals z poprzedniego raportu",
+        "| Ticker | Cena | Mcap | P/E | EPS | Stopa dyw. |",
+        "|---|---:|---:|---:|---:|---:|",
+    ]
+    for f in prev.fundamentals:
+        price = f"{f.last_price:.2f}" if f.last_price is not None else "—"
+        mcap = f"{f.market_cap:,.0f}" if f.market_cap is not None else "—"
+        pe = f"{f.pe_ratio:.2f}" if f.pe_ratio is not None else "—"
+        eps = f"{f.eps:.2f}" if f.eps is not None else "—"
+        dy = f"{f.dividend_yield * 100:.2f}%" if f.dividend_yield is not None else "—"
+        lines.append(
+            f"| {f.ticker} | {price} | {mcap} | {pe} | {eps} | {dy} |"
+        )
+
+    # Previous LLM-generated narrative (the actual prior report content).
+    if prev.report:
+        lines.append("")
+        lines.append("### Treść poprzedniego raportu (do bazowania)")
+        lines.append(
+            "_Gdy nie ma świeżych danych, OPRZYJ się na poniższych "
+            "narracjach z poprzedniego raportu — przekopiuj je do nowego "
+            "raportu z minimalnymi aktualizacjami. Zaktualizuj tylko gdy "
+            "pojawiły się nowe news/fundamentals._"
+        )
+        for co in prev.report.get("companies", []):
+            lines.append("")
+            lines.append(f"#### {co.get('ticker', '?')} — {co.get('name', '?')}")
+            lines.append(f"- headline: {co.get('headline', '')}")
+            lines.append(f"- last_reading_label: {co.get('last_reading_label', '')}")
+            lines.append(f"- vs_expectations: {co.get('vs_expectations', '')}")
+            lines.append(f"- next_report_label: {co.get('next_report_label', '')}")
+            lines.append(f"- key_question: {co.get('key_question', '')}")
+            lines.append(f"- thesis_status: {co.get('thesis_status', '')}")
+            lines.append(f"- signal: {co.get('signal', '')} / {co.get('signal_title', '')}")
+            lines.append(f"- recommendation: {co.get('recommendation', '')}")
+            lines.append("")
+            lines.append("**last_results_summary (poprzedni):**")
+            lines.append(co.get("last_results_summary", ""))
+            lines.append("")
+            lines.append("**next_catalyst_focus (poprzedni):**")
+            lines.append(co.get("next_catalyst_focus", ""))
+        if prev.report.get("calendar"):
+            lines.append("")
+            lines.append("**Poprzedni kalendarz katalizatorów:**")
+            for c in prev.report["calendar"]:
+                t = c.get("ticker") or "—"
+                lines.append(
+                    f"- {c.get('date_label', '')} [{t}] "
+                    f"{c.get('title', '')}: {c.get('description', '')}"
+                )
+    return "\n".join(lines)
+
+
+def build_monitoring_context(
+    portfolio: Portfolio,
+    status: PortfolioStatus,
+    *,
+    fundamentals: Sequence[FundamentalsSnapshot] = (),
+    news: Sequence[NewsItem] = (),
+    previous_snapshot: MonitoringSnapshot | None = None,
+) -> str:
+    """Assemble the full prompt context for the monitoring report.
+
+    Skips :func:`render_holdings_table` (truncated theses) since we render
+    the full theses below — saves ~1 KB of redundant prompt tokens.
+    """
+    return "\n\n".join(
+        [
+            render_full_theses(portfolio),
+            render_status(status),
+            render_fundamentals(fundamentals),
+            render_news_with_espi_flag(news),
+            render_previous_snapshot(previous_snapshot),
         ]
     )
 

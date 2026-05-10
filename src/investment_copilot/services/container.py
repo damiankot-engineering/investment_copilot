@@ -24,6 +24,7 @@ from investment_copilot.infrastructure.llm import LLMClient, build_llm_client
 from investment_copilot.infrastructure.providers import (
     MarketDataProvider,
     NewsProvider,
+    StooqFundamentalsProvider,
     build_market_provider,
     build_news_providers,
 )
@@ -31,6 +32,7 @@ from investment_copilot.infrastructure.storage import ParquetCache, SQLiteStore
 from investment_copilot.services.backtest_service import BacktestService
 from investment_copilot.services.copilot_service import CopilotService
 from investment_copilot.services.data_service import DataService
+from investment_copilot.services.monitoring_service import MonitoringService
 from investment_copilot.services.portfolio_service import PortfolioService
 
 
@@ -52,6 +54,7 @@ class ServiceContainer:
     portfolio_service: PortfolioService
     backtest_service: BacktestService
     copilot_service: CopilotService
+    monitoring_service: MonitoringService
 
 
 def build_container(config: AppConfig) -> ServiceContainer:
@@ -85,6 +88,12 @@ def build_container(config: AppConfig) -> ServiceContainer:
         data_service=data_service,
         llm_config=config.llm,
     )
+    monitoring_service = MonitoringService(
+        copilot_service=copilot_service,
+        data_service=data_service,
+        portfolio_service=portfolio_service,
+        fundamentals_provider=StooqFundamentalsProvider(),
+    )
 
     return ServiceContainer(
         config=config,
@@ -97,4 +106,5 @@ def build_container(config: AppConfig) -> ServiceContainer:
         portfolio_service=portfolio_service,
         backtest_service=backtest_service,
         copilot_service=copilot_service,
+        monitoring_service=monitoring_service,
     )

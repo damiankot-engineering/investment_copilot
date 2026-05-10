@@ -32,6 +32,7 @@ from investment_copilot.gui import (
     format_money_signed,
     format_pct,
     holdings_dataframe,
+    list_monitoring_reports,
     list_reports,
 )
 from investment_copilot.infrastructure.llm import LLMError
@@ -245,7 +246,7 @@ _STRATEGY_DESCRIPTIONS = {
     ),
     "buy_and_hold": (
         "**Buy & Hold**  \n"
-        "Kupuje wszystkie akcje portfela na pierwszym dniu i trzyma je przez cały okres backteste. "
+        "Kupuje wszystkie akcje portfela na pierwszym dniu i trzyma je przez cały okres backtestu. "
         "Brak rebalansowania ani sprzedaży — idealna strategia bazowa.  \n"
         "_Passive buy-and-hold baseline. Punkt odniesienia dla aktywnych strategii._"
     ),
@@ -580,6 +581,193 @@ def _view_reports(
         st.markdown(body)
 
 
+# --- View: Monitoring -----------------------------------------------------
+
+
+def _view_monitoring(
+    container: ServiceContainer,
+    portfolio: Portfolio,
+    orchestrator: Orchestrator,
+) -> None:
+    st.header("📋 Monitoring portfela")
+    st.caption(
+        "Cykliczny raport monitorujący: fundamentals (Stooq) + ESPI/news + "
+        "porównanie z poprzednim raportem. Wynik to plik HTML w "
+        "`reports/monitoring/`."
+    )
+
+    monitoring_dir = Path("reports") / "monitoring"
+
+    cols = st.columns([1, 1, 2])
+    news_days = cols[0].number_input(
+        "News window (days)",
+        min_value=7,
+        max_value=120,
+        value=30,
+        step=1,
+        key="monitoring_news_days",
+        help="Window for ESPI/news context fed to the LLM.",
+    )
+    filename = cols[1].text_input(
+        "Filename (optional)",
+        value="",
+        key="monitoring_filename",
+    )
+    generate = cols[2].button(
+        "📋 Generuj raport monitorujący",
+        width='stretch',
+        type="primary",
+    )
+
+    prev = container.monitoring_service.load_latest_snapshot()
+    if prev is not None:
+        st.caption(
+            f"📎 Poprzedni snapshot: "
+            f"{prev.generated_at.strftime('%Y-%m-%d %H:%M UTC')} — "
+            f"raport będzie zawierał porównanie."
+        )
+    else:
+        st.caption("📎 Brak poprzedniego snapshotu — to będzie pierwszy raport.")
+
+    if generate:
+        with st.spinner("Pobieram fundamentals + news, pytam LLM…"):
+            try:
+                result = orchestrator.generate_monitoring_report(
+                    portfolio,
+                    news_days_back=int(news_days),
+                    filename=filename or None,
+                )
+            except LLMError as exc:
+                st.error(f"❌ LLM failed: {exc}")
+                return
+            except Exception as exc:  # pragma: no cover
+                st.error(f"❌ Monitoring run failed: {exc}")
+                return
+
+            _set_state("last_monitoring_result", result)
+            for w in result.warnings:
+                st.warning(w)
+            st.success(
+                f"✅ Raport zapisany: `{result.html_path.name}` · "
+                f"snapshot: `{result.snapshot_path.name}` · "
+                f"{'z porównaniem' if result.had_previous_snapshot else 'pierwszy raport'}"
+            )
+
+    st.subheader("Istniejące raporty")
+    files = list_monitoring_reports(monitoring_dir)
+    if not files:
+        st.info(f"Brak raportów w `{monitoring_dir.resolve()}`. Wygeneruj nowy powyżej.")
+        return
+
+    # Clear-all action with confirm checkbox
+    clear_cols = st.columns([1, 3])
+    with clear_cols[0]:
+        confirm_clear = st.checkbox(
+            "Potwierdź czyszczenie",
+            key="monitoring_confirm_clear",
+            help="Zaznacz aby odblokować przycisk 'Wyczyść wszystkie raporty'.",
+        )
+    with clear_cols[1]:
+        if st.button(
+            "🧹 Wyczyść wszystkie raporty (HTML + snapshoty)",
+            disabled=not confirm_clear,
+            width='stretch',
+        ):
+            removed = _delete_all_monitoring(monitoring_dir)
+            st.success(f"Usunięto {removed} plik(ów).")
+            st.session_state["monitoring_confirm_clear"] = False
+            st.rerun()
+
+    st.divider()
+
+    # Per-report list with delete buttons
+    st.markdown("**Raporty (najnowsze pierwsze):**")
+    for path in files:
+        cols = st.columns([5, 1])
+        size = _human_size(path.stat().st_size)
+        when = datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+        with cols[0]:
+            if st.button(
+                f"📄 {path.name} · {size} · {when}",
+                key=f"select_{path.name}",
+                width='stretch',
+            ):
+                _set_state("monitoring_selected_path", str(path))
+        with cols[1]:
+            if st.button(
+                "🗑️",
+                key=f"del_{path.name}",
+                help=f"Usuń {path.name} (i powiązany snapshot)",
+                width='stretch',
+            ):
+                _delete_monitoring_pair(path)
+                # If currently selected, clear selection
+                if _get_state("monitoring_selected_path") == str(path):
+                    _set_state("monitoring_selected_path", None)
+                st.rerun()
+
+    selected_path_str = _get_state("monitoring_selected_path")
+    selected = Path(selected_path_str) if selected_path_str else files[0]
+    if not selected.exists():
+        return
+
+    st.divider()
+    body = selected.read_text(encoding="utf-8")
+    col_a, col_b = st.columns([3, 1])
+    with col_b:
+        st.download_button(
+            "⬇️ Download HTML",
+            data=body,
+            file_name=selected.name,
+            mime="text/html",
+            width='stretch',
+        )
+    with col_a:
+        st.caption(f"Podgląd: `{selected.name}`")
+    st.components.v1.html(body, height=900, scrolling=True)
+
+
+def _delete_monitoring_pair(report_path: Path) -> None:
+    """Delete an HTML report + its sibling snapshot JSON (matched by timestamp)."""
+    try:
+        report_path.unlink(missing_ok=True)
+    except OSError as exc:
+        logger.warning("Failed to delete %s: %s", report_path, exc)
+        return
+    # Snapshot filename: snapshot_<TS>.json next to monitoring/snapshots/
+    if report_path.name.startswith("monitoring_") and report_path.name.endswith(".html"):
+        ts = report_path.stem.removeprefix("monitoring_")
+        snap = report_path.parent / "snapshots" / f"snapshot_{ts}.json"
+        try:
+            snap.unlink(missing_ok=True)
+        except OSError as exc:  # pragma: no cover
+            logger.warning("Failed to delete snapshot %s: %s", snap, exc)
+
+
+def _delete_all_monitoring(monitoring_dir: Path) -> int:
+    """Delete every HTML report and snapshot under ``monitoring_dir``."""
+    if not monitoring_dir.is_dir():
+        return 0
+    count = 0
+    for p in monitoring_dir.iterdir():
+        if p.is_file() and p.suffix == ".html":
+            try:
+                p.unlink()
+                count += 1
+            except OSError as exc:  # pragma: no cover
+                logger.warning("Failed to delete %s: %s", p, exc)
+    snaps = monitoring_dir / "snapshots"
+    if snaps.is_dir():
+        for p in snaps.iterdir():
+            if p.is_file() and p.suffix == ".json":
+                try:
+                    p.unlink()
+                    count += 1
+                except OSError as exc:  # pragma: no cover
+                    logger.warning("Failed to delete %s: %s", p, exc)
+    return count
+
+
 def _human_size(n_bytes: int) -> str:
     for unit in ("B", "KB", "MB"):
         if n_bytes < 1024:
@@ -602,7 +790,13 @@ def main() -> None:
     st.sidebar.caption(f"Benchmark: {container.config.backtest.benchmark}")
     st.sidebar.caption(f"LLM: {container.config.llm.provider} ({container.config.llm.model_analysis})")
 
-    tabs = st.tabs(["📊 Portfolio", "📈 Backtest", "✨ AI Analysis", "📄 Reports"])
+    tabs = st.tabs([
+        "📊 Portfolio",
+        "📈 Backtest",
+        "✨ AI Analysis",
+        "📋 Monitoring",
+        "📄 Reports",
+    ])
     with tabs[0]:
         _view_portfolio(portfolio, orchestrator)
     with tabs[1]:
@@ -610,6 +804,8 @@ def main() -> None:
     with tabs[2]:
         _view_analysis(portfolio, orchestrator)
     with tabs[3]:
+        _view_monitoring(container, portfolio, orchestrator)
+    with tabs[4]:
         _view_reports(container, portfolio, orchestrator)
 
     st.sidebar.divider()

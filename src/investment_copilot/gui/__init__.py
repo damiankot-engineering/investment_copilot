@@ -107,6 +107,16 @@ def list_reports(directory: Path | str) -> list[Path]:
     return files
 
 
+def list_monitoring_reports(directory: Path | str) -> list[Path]:
+    """Return HTML monitoring reports in ``directory``, newest first by mtime."""
+    d = Path(directory)
+    if not d.is_dir():
+        return []
+    files = [p for p in d.iterdir() if p.is_file() and p.suffix == ".html"]
+    files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return files
+
+
 # --- Formatters ------------------------------------------------------------
 
 

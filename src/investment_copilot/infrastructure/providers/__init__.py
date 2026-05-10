@@ -11,6 +11,9 @@ from investment_copilot.infrastructure.providers.factory import (
 )
 from investment_copilot.infrastructure.providers.rss import RSSProvider
 from investment_copilot.infrastructure.providers.stooq import StooqProvider
+from investment_copilot.infrastructure.providers.stooq_fundamentals import (
+    StooqFundamentalsProvider,
+)
 from investment_copilot.infrastructure.providers.stooq_news import StooqNewsProvider
 
 __all__ = [
@@ -18,6 +21,7 @@ __all__ = [
     "NewsProvider",
     "ProviderError",
     "RSSProvider",
+    "StooqFundamentalsProvider",
     "StooqNewsProvider",
     "StooqProvider",
     "build_market_provider",

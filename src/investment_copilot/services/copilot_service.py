@@ -25,9 +25,16 @@ from typing import Sequence
 
 from investment_copilot.config.schema import LLMConfig
 from investment_copilot.domain.backtest import BacktestResult
+from investment_copilot.domain.fundamentals import (
+    FundamentalsSnapshot,
+    MonitoringSnapshot,
+)
 from investment_copilot.domain.models import NewsItem, normalize_ticker
 from investment_copilot.domain.portfolio import Portfolio, PortfolioStatus
 from investment_copilot.domain.prompts import (
+    MONITORING_SYSTEM,
+    MONITORING_USER_TEMPLATE,
+    MonitoringReport,
     PORTFOLIO_SYSTEM,
     PORTFOLIO_USER_TEMPLATE,
     PortfolioAnalysis,
@@ -37,6 +44,7 @@ from investment_copilot.domain.prompts import (
     THESIS_SYSTEM,
     THESIS_USER_TEMPLATE,
     ThesisUpdate,
+    build_monitoring_context,
     build_portfolio_context,
     build_thesis_context,
 )
@@ -136,6 +144,35 @@ class CopilotService:
             model=self._llm_cfg.model_analysis,
             temperature=self._llm_cfg.temperature,
             max_tokens=self._llm_cfg.max_tokens,
+        )
+
+    def generate_monitoring(
+        self,
+        portfolio: Portfolio,
+        status: PortfolioStatus,
+        *,
+        fundamentals: Sequence[FundamentalsSnapshot] = (),
+        news: Sequence[NewsItem] = (),
+        previous_snapshot: MonitoringSnapshot | None = None,
+    ) -> MonitoringReport:
+        """Generate the monitoring report (HTML-source structured output)."""
+        context = build_monitoring_context(
+            portfolio,
+            status,
+            fundamentals=fundamentals,
+            news=news,
+            previous_snapshot=previous_snapshot,
+        )
+        user_prompt = MONITORING_USER_TEMPLATE.format(context=context)
+        return self._llm.complete_structured(
+            system_prompt=MONITORING_SYSTEM,
+            user_prompt=user_prompt,
+            response_schema=MonitoringReport,
+            model=self._llm_cfg.model_analysis,
+            temperature=self._llm_cfg.temperature,
+            # 3500 tokens response is enough for 5-7 companies + calendar
+            # while keeping total request under Groq's per-minute caps.
+            max_tokens=3500,
         )
 
     # -- Internal -----------------------------------------------------------

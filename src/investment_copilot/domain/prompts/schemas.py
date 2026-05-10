@@ -20,6 +20,17 @@ from pydantic import BaseModel, ConfigDict, Field
 
 SeverityLevel = Literal["niskie", "średnie", "wysokie"]
 RecommendationAction = Literal["trzymaj", "zwiększ", "zmniejsz", "obserwuj", "zamknij"]
+ThesisStatus = Literal[
+    "potwierdzona",
+    "silnie potwierdzona",
+    "w mocy",
+    "pod testem",
+    "osłabiona",
+    "do rewizji",
+    "wykonana",
+]
+SignalDirection = Literal["bullish", "neutral", "bearish"]
+ChangeDirection = Literal["akceleracja", "stabilizacja", "rozczarowanie", "brak zmian"]
 
 
 class HoldingComment(BaseModel):
@@ -168,4 +179,170 @@ class ThesisUpdate(BaseModel):
         ge=1,
         le=10,
         description="Poziom pewności oceny (1-10).",
+    )
+
+
+# --- Monitoring report ------------------------------------------------------
+
+
+class MonitoringMetric(BaseModel):
+    """Pojedyncza wyróżniona metryka pokazywana w sekcji per-spółka."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    label: str = Field(
+        min_length=1, max_length=80,
+        description="Krótki nagłówek, np. 'PRZYCHODY Q1 2026', 'EBITDA FY2025'.",
+    )
+    value: str = Field(
+        min_length=1, max_length=80,
+        description="Wartość sformatowana, np. '42.9M PLN', '+71% r/r'.",
+    )
+    detail: str | None = Field(
+        default=None, max_length=200,
+        description="Opcjonalna druga linijka, np. 'marża 59.2%'.",
+    )
+    tone: Literal["positive", "negative", "warning", "neutral"] = Field(
+        default="neutral",
+        description="Wydźwięk: positive/negative/warning/neutral. Steruje kolorem.",
+    )
+
+
+class MonitoringCompany(BaseModel):
+    """Sekcja per-spółka raportu monitorującego."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ticker: str = Field(description="Ticker w formacie Stooq, np. 'dnp.pl'.")
+    name: str = Field(description="Nazwa spółki.")
+    headline: str = Field(
+        min_length=1, max_length=200,
+        description="Jednolinijkowa konkluzja, np. '+71% Q2 r/r — zaskoczenie'.",
+    )
+    metrics: list[MonitoringMetric] = Field(
+        min_length=3, max_length=4,
+        description=(
+            "3-4 metryki (preferuj 4). Pierwsza = wynik ostatniego raportu, "
+            "ostatnia = data najbliższego raportu lub 'TBA'."
+        ),
+    )
+    last_reading_label: str = Field(
+        min_length=1, max_length=80,
+        description="Etykieta ostatniego odczytu do tabeli, np. 'RR 2025 + Q1'.",
+    )
+    vs_expectations: str = Field(
+        min_length=1, max_length=120,
+        description="vs oczekiwań do tabeli, np. '✅ Zgodny', '❌ -20% vs kons.'.",
+    )
+    next_report_label: str = Field(
+        min_length=1, max_length=40,
+        description="Etykieta najbliższego raportu, np. '29 MAJ 2026' lub 'TBA'.",
+    )
+    key_question: str = Field(
+        min_length=1, max_length=160,
+        description="Kluczowe pytanie do tabeli, np. 'Marże z BGMO, dywidenda'.",
+    )
+    last_results_summary: str = Field(
+        min_length=80, max_length=1200,
+        description=(
+            "3-5 zdań: co pokazał ostatni raport / ESPI. Gdy brak świeżych "
+            "danych — bazuj na poprzednim raporcie albo tezie. Konkretna "
+            "treść; nie pisz 'brak danych'."
+        ),
+    )
+    next_catalyst_focus: str = Field(
+        min_length=80, max_length=1200,
+        description=(
+            "3-5 zdań: na co czekamy. Lista pytań (1)/(2)/(3). Bazuj na "
+            "tezie/branży gdy brak ESPI."
+        ),
+    )
+    thesis_status: ThesisStatus = Field(description="Status tezy inwestycyjnej.")
+    signal: SignalDirection = Field(
+        description="bullish / neutral / bearish (steruje kolorem signal-bara).",
+    )
+    signal_title: str = Field(
+        min_length=1, max_length=160,
+        description="Nagłówek pasa sygnałowego, np. 'TEZA NIENARUSZONA'.",
+    )
+    signal_body: str = Field(
+        min_length=1, max_length=600,
+        description="Uzasadnienie 2-3 zdania po polsku.",
+    )
+    recommendation: RecommendationAction = Field(
+        description="trzymaj / zwiększ / zmniejsz / obserwuj / zamknij.",
+    )
+    change_narrative: str | None = Field(
+        default=None, max_length=400,
+        description=(
+            "1-2 zdania o zmianie vs poprzedni raport. Null gdy brak "
+            "poprzedniego raportu lub brak istotnej zmiany."
+        ),
+    )
+    change_direction: ChangeDirection | None = Field(
+        default=None,
+        description=(
+            "akceleracja / stabilizacja / rozczarowanie / brak zmian. "
+            "Null gdy brak poprzedniego raportu."
+        ),
+    )
+
+
+class MonitoringCalendarEntry(BaseModel):
+    """Wiersz kalendarza katalizatorów w raporcie monitorującym."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    date_label: str = Field(
+        min_length=1, max_length=40,
+        description="Data w formacie 'DD MMM YYYY', np. '14 MAJ 2026'.",
+    )
+    ticker: str | None = Field(
+        default=None, description="Ticker lub null gdy ogólny katalizator.",
+    )
+    title: str = Field(
+        min_length=1, max_length=200,
+        description="Krótki tytuł, np. 'Dino Polska — Q1 2026'.",
+    )
+    description: str = Field(
+        min_length=1, max_length=400,
+        description="1-2 zdania dlaczego istotny.",
+    )
+    importance: Literal["high", "medium", "low"] = Field(
+        default="medium",
+        description="high (czerwony) / medium (żółty) / low (szary). Steruje kolorem.",
+    )
+
+
+class MonitoringReport(BaseModel):
+    """Raport monitorujący portfel — odpowiednik załączonego HTML wzoru."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(
+        min_length=1, max_length=200,
+        description="Tytuł, np. 'Przegląd Portfela — Q1 2026'.",
+    )
+    subtitle: str | None = Field(
+        default=None, max_length=200, description="Opcjonalny podtytuł.",
+    )
+    synthesis: str = Field(
+        min_length=1, max_length=1500,
+        description=(
+            "Synteza 4-6 zdań: najsilniejszy i najsłabszy sygnał, raporty "
+            "na które czekamy."
+        ),
+    )
+    companies: list[MonitoringCompany] = Field(
+        description=(
+            "Per pozycja DOKŁADNIE jeden wpis w kolejności z kontekstu."
+        ),
+    )
+    calendar: list[MonitoringCalendarEntry] = Field(
+        max_length=15,
+        description="Do 15 katalizatorów chronologicznie.",
+    )
+    confidence: int = Field(
+        ge=1, le=10,
+        description="1-10 (10 = pełen kontekst, 4-6 = używasz poprzedniego raportu).",
     )

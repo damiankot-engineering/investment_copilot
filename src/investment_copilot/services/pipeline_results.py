@@ -13,8 +13,13 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field
 
 from investment_copilot.domain.backtest import BacktestResult
+from investment_copilot.domain.fundamentals import MonitoringSnapshot
 from investment_copilot.domain.portfolio import PortfolioStatus
-from investment_copilot.domain.prompts import PortfolioAnalysis, RiskAlerts
+from investment_copilot.domain.prompts import (
+    MonitoringReport,
+    PortfolioAnalysis,
+    RiskAlerts,
+)
 
 
 class AnalysisBundle(BaseModel):
@@ -39,5 +44,20 @@ class FullReport(BaseModel):
     analysis: PortfolioAnalysis | None = None
     risks: RiskAlerts | None = None
     report_path: Path
+    warnings: list[str] = Field(default_factory=list)
+    generated_at: datetime
+
+
+class MonitoringRunResult(BaseModel):
+    """Output of the ``generate_monitoring_report`` pipeline."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
+
+    status: PortfolioStatus
+    report: MonitoringReport
+    snapshot: MonitoringSnapshot
+    html_path: Path
+    snapshot_path: Path
+    had_previous_snapshot: bool
     warnings: list[str] = Field(default_factory=list)
     generated_at: datetime

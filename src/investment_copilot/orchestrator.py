@@ -28,7 +28,11 @@ from investment_copilot.domain.backtest import BacktestError, BacktestResult
 from investment_copilot.domain.portfolio import Portfolio
 from investment_copilot.infrastructure.llm import LLMError
 from investment_copilot.services.data_service import RefreshReport
-from investment_copilot.services.pipeline_results import AnalysisBundle, FullReport
+from investment_copilot.services.pipeline_results import (
+    AnalysisBundle,
+    FullReport,
+    MonitoringRunResult,
+)
 from investment_copilot.services.container import ServiceContainer
 from investment_copilot.services.report_service import ReportService
 
@@ -241,4 +245,53 @@ class Orchestrator:
             report_path=report_path,
             warnings=warnings,
             generated_at=datetime.now(timezone.utc),
+        )
+
+    # -- Pipeline 5: monitoring report -------------------------------------
+
+    def generate_monitoring_report(
+        self,
+        portfolio: Portfolio,
+        *,
+        news_days_back: int = 30,
+        filename: str | None = None,
+    ) -> MonitoringRunResult:
+        """Full monitoring pipeline: fundamentals + news + LLM + HTML + diff snapshot."""
+        warnings: list[str] = []
+        status = self._container.portfolio_service.current_status(portfolio)
+
+        monitoring = self._container.monitoring_service
+        previous = monitoring.load_latest_snapshot()
+        had_previous = previous is not None
+
+        try:
+            report, snapshot, gen_warnings = monitoring.generate(
+                portfolio,
+                status,
+                news_days_back=news_days_back,
+            )
+        except LLMError as exc:
+            logger.error("Monitoring report generation failed: %s", exc)
+            raise
+
+        warnings.extend(gen_warnings)
+
+        snapshot_path = monitoring.save_snapshot(snapshot)
+        html_path = self._reports.write_monitoring(
+            report,
+            generated_at=snapshot.generated_at,
+            portfolio=portfolio,
+            had_previous_snapshot=had_previous,
+            filename=filename,
+        )
+
+        return MonitoringRunResult(
+            status=status,
+            report=report,
+            snapshot=snapshot,
+            html_path=html_path,
+            snapshot_path=snapshot_path,
+            had_previous_snapshot=had_previous,
+            warnings=warnings,
+            generated_at=snapshot.generated_at,
         )
