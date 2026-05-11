@@ -83,6 +83,48 @@ def load_portfolio(path: Path | str) -> Portfolio:
         raise PortfolioError(f"Invalid portfolio: {exc}") from exc
 
 
+# --- YAML saving ------------------------------------------------------------
+
+
+def save_portfolio(portfolio: Portfolio, path: Path | str) -> Path:
+    """Persist ``portfolio`` to ``path`` as UTF-8 YAML, with a ``.bak`` backup.
+
+    The previous file content (if any) is copied to ``<path>.bak`` before
+    overwrite. Comments and original key ordering are NOT preserved
+    (PyYAML safe_dump). Empty optional fields (``name``, ``keywords``) are
+    omitted from output to keep the file tidy.
+    """
+    p = Path(path)
+
+    if p.exists():
+        backup = p.with_suffix(p.suffix + ".bak")
+        try:
+            backup.write_bytes(p.read_bytes())
+        except OSError as exc:
+            raise PortfolioError(f"Failed to write backup {backup}: {exc}") from exc
+
+    data = portfolio.model_dump(mode="json", exclude_none=False)
+    for h in data.get("holdings", []):
+        if not h.get("name"):
+            h.pop("name", None)
+        if not h.get("keywords"):
+            h.pop("keywords", None)
+
+    try:
+        text = yaml.safe_dump(
+            data,
+            sort_keys=False,
+            allow_unicode=True,
+            default_flow_style=False,
+        )
+    except yaml.YAMLError as exc:
+        raise PortfolioError(f"Failed to serialize portfolio: {exc}") from exc
+
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text, encoding="utf-8")
+    return p
+
+
 # --- Service ---------------------------------------------------------------
 
 

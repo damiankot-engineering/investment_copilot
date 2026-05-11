@@ -38,11 +38,13 @@ from investment_copilot.gui import (
 from investment_copilot.infrastructure.llm import LLMError
 from investment_copilot.infrastructure.logging import configure_logging
 from investment_copilot.orchestrator import Orchestrator
+from investment_copilot.domain.portfolio import Holding
 from investment_copilot.services import (
     PortfolioError,
     ServiceContainer,
     build_container,
     load_portfolio,
+    save_portfolio,
 )
 
 logger = logging.getLogger(__name__)
@@ -61,7 +63,7 @@ st.set_page_config(
 
 @st.cache_resource(show_spinner=False)
 def _bootstrap(config_path: str, portfolio_path: str | None) -> tuple[
-    ServiceContainer, Portfolio, Orchestrator
+    ServiceContainer, Portfolio, Orchestrator, str
 ]:
     """Load config, build the container, load portfolio. Cached per (config, portfolio) pair."""
     cfg = load_config(config_path)
@@ -70,7 +72,7 @@ def _bootstrap(config_path: str, portfolio_path: str | None) -> tuple[
     pf_path = portfolio_path or str(cfg.portfolio.path)
     portfolio = load_portfolio(pf_path)
     orchestrator = Orchestrator(container)
-    return container, portfolio, orchestrator
+    return container, portfolio, orchestrator, pf_path
 
 
 def _safe_bootstrap(config_path: str, portfolio_path: str | None):
@@ -128,7 +130,11 @@ def _set_state(key: str, value: Any) -> None:
 # --- View: Portfolio -------------------------------------------------------
 
 
-def _view_portfolio(portfolio: Portfolio, orchestrator: Orchestrator) -> None:
+def _view_portfolio(
+    portfolio: Portfolio,
+    orchestrator: Orchestrator,
+    pf_path: str,
+) -> None:
     st.header("Portfolio")
 
     cols = st.columns([1, 1, 4])
@@ -160,6 +166,7 @@ def _view_portfolio(portfolio: Portfolio, orchestrator: Orchestrator) -> None:
 
     _render_status_panel(portfolio, status)
     _render_refresh_warnings()
+    _render_portfolio_editor(portfolio, pf_path)
 
 
 def _render_status_panel(portfolio: Portfolio, status: PortfolioStatus) -> None:
@@ -203,6 +210,10 @@ def _render_status_panel(portfolio: Portfolio, status: PortfolioStatus) -> None:
             "Last date": st.column_config.DateColumn(),
             "Cost basis": st.column_config.NumberColumn(format="%.2f"),
             "Value": st.column_config.NumberColumn(format="%.2f"),
+            "Weight": st.column_config.NumberColumn(
+                format="%.2f%%",
+                help="Udział pozycji w wartości rynkowej portfela",
+            ),
             "PnL": st.column_config.NumberColumn(format="%+.2f"),
             "PnL%": st.column_config.NumberColumn(format="%+.2%"),
         },
@@ -215,6 +226,118 @@ def _render_status_panel(portfolio: Portfolio, status: PortfolioStatus) -> None:
             st.markdown(f"**{label}**")
             st.markdown(h.thesis)
             st.divider()
+
+
+def _portfolio_to_editor_df(portfolio: Portfolio) -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "ticker": h.ticker,
+                "name": h.name or "",
+                "shares": float(h.shares),
+                "entry_price": float(h.entry_price),
+                "entry_date": h.entry_date,
+                "thesis": h.thesis,
+                "keywords": ", ".join(h.keywords),
+            }
+            for h in portfolio.holdings
+        ]
+    )
+
+
+def _editor_row_to_holding(row: dict) -> Holding:
+    raw_keywords = row.get("keywords") or ""
+    keywords = [k.strip() for k in str(raw_keywords).split(",") if k.strip()]
+    name = (row.get("name") or "").strip() or None
+    return Holding(
+        ticker=str(row["ticker"]).strip(),
+        shares=float(row["shares"]),
+        entry_price=float(row["entry_price"]),
+        entry_date=row["entry_date"],
+        thesis=str(row["thesis"]),
+        name=name,
+        keywords=keywords,
+    )
+
+
+def _render_portfolio_editor(portfolio: Portfolio, pf_path: str) -> None:
+    with st.expander("Edit portfolio", expanded=False):
+        st.caption(
+            f"Plik: `{pf_path}` · zmiany trafią do YAML po kliknięciu **Zapisz**. "
+            "Poprzednia wersja zostanie skopiowana do `<plik>.bak`."
+        )
+
+        edited = st.data_editor(
+            _portfolio_to_editor_df(portfolio),
+            num_rows="dynamic",
+            width="stretch",
+            key="portfolio_editor",
+            column_config={
+                "ticker": st.column_config.TextColumn(
+                    "Ticker", required=True,
+                    help="np. PKN, PKN.WA lub pkn.pl — zostanie znormalizowany.",
+                ),
+                "name": st.column_config.TextColumn("Name"),
+                "shares": st.column_config.NumberColumn(
+                    "Shares", min_value=0.0, step=1.0, required=True, format="%.4f",
+                ),
+                "entry_price": st.column_config.NumberColumn(
+                    "Entry price", min_value=0.0, step=0.01, required=True, format="%.4f",
+                ),
+                "entry_date": st.column_config.DateColumn(
+                    "Entry date", required=True,
+                ),
+                "thesis": st.column_config.TextColumn(
+                    "Thesis", required=True,
+                    help="Krótka teza inwestycyjna (markdown).",
+                ),
+                "keywords": st.column_config.TextColumn(
+                    "Keywords",
+                    help="Słowa kluczowe oddzielone przecinkami (puste → ticker).",
+                ),
+            },
+        )
+
+        cols = st.columns([1, 1, 4])
+        save_clicked = cols[0].button("💾 Zapisz do YAML", type="primary", width="stretch")
+        if cols[1].button("↩️ Odrzuć zmiany", width="stretch"):
+            st.session_state.pop("portfolio_editor", None)
+            st.rerun()
+
+        if not save_clicked:
+            return
+
+        try:
+            holdings: list[Holding] = []
+            for idx, row in edited.iterrows():
+                row_dict = row.to_dict()
+                if not row_dict.get("ticker") or pd.isna(row_dict.get("shares")):
+                    continue
+                try:
+                    holdings.append(_editor_row_to_holding(row_dict))
+                except Exception as exc:
+                    st.error(f"Wiersz {int(idx) + 1}: {exc}")
+                    return
+
+            new_portfolio = Portfolio(
+                base_currency=portfolio.base_currency,
+                holdings=holdings,
+            )
+        except Exception as exc:
+            st.error(f"❌ Walidacja portfolio: {exc}")
+            return
+
+        try:
+            written = save_portfolio(new_portfolio, pf_path)
+        except PortfolioError as exc:
+            st.error(f"❌ Zapis nie powiódł się: {exc}")
+            return
+
+        st.success(f"✅ Zapisano `{written}` (backup: `{written}.bak`).")
+        _bootstrap.clear()
+        _set_state("last_status", None)
+        _set_state("last_refresh_report", None)
+        st.rerun()
 
 
 def _render_refresh_warnings() -> None:
@@ -781,7 +904,7 @@ def _human_size(n_bytes: int) -> str:
 
 def main() -> None:
     config_path, portfolio_override = _sidebar()
-    container, portfolio, orchestrator = _safe_bootstrap(config_path, portfolio_override)
+    container, portfolio, orchestrator, pf_path = _safe_bootstrap(config_path, portfolio_override)
 
     st.sidebar.divider()
     st.sidebar.markdown("**Loaded:**")
@@ -798,7 +921,7 @@ def main() -> None:
         "📄 Reports",
     ])
     with tabs[0]:
-        _view_portfolio(portfolio, orchestrator)
+        _view_portfolio(portfolio, orchestrator, pf_path)
     with tabs[1]:
         _view_backtest(portfolio, orchestrator)
     with tabs[2]:

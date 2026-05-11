@@ -36,9 +36,15 @@ def holdings_dataframe(
     Streamlit displays as empty cells.
     """
     by_ticker = {h.ticker: h for h in portfolio.holdings}
+    total_value = status.total_market_value or 0.0
     rows: list[dict] = []
     for s in status.holdings:
         holding = by_ticker.get(s.ticker)
+        weight = (
+            s.market_value / total_value * 100.0
+            if s.market_value is not None and total_value
+            else None
+        )
         rows.append(
             {
                 "Ticker": s.ticker,
@@ -49,6 +55,7 @@ def holdings_dataframe(
                 "Last date": s.last_price_date,
                 "Cost basis": s.cost_basis,
                 "Value": s.market_value,
+                "Weight": weight,
                 "PnL": s.unrealized_pnl,
                 "PnL%": s.unrealized_pnl_pct,
             }

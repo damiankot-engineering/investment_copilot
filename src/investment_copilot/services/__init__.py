@@ -14,6 +14,7 @@ from investment_copilot.services.portfolio_service import (
     PortfolioError,
     PortfolioService,
     load_portfolio,
+    save_portfolio,
 )
 from investment_copilot.services.report_service import ReportService
 
@@ -32,4 +33,5 @@ __all__ = [
     "ServiceContainer",
     "build_container",
     "load_portfolio",
+    "save_portfolio",
 ]
