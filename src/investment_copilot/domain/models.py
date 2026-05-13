@@ -108,6 +108,8 @@ def resolve_benchmark(name: str) -> str:
         return BENCHMARK_SYMBOLS[n]
     if n.startswith("^"):
         return n
+    if "." in n and not n.startswith(".") and not n.endswith("."):
+        return n
     raise ValueError(f"Unknown benchmark: {name!r}")
 
 

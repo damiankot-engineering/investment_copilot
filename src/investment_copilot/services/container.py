@@ -22,6 +22,7 @@ from typing import Sequence
 from investment_copilot.config.schema import AppConfig
 from investment_copilot.infrastructure.llm import LLMClient, build_llm_client
 from investment_copilot.infrastructure.providers import (
+    BiznesRadarProvider,
     MarketDataProvider,
     NewsProvider,
     StooqFundamentalsProvider,
@@ -92,6 +93,8 @@ def build_container(config: AppConfig) -> ServiceContainer:
         copilot_service=copilot_service,
         data_service=data_service,
         portfolio_service=portfolio_service,
+        sqlite_store=sqlite_store,
+        biznesradar_provider=BiznesRadarProvider(),
         fundamentals_provider=StooqFundamentalsProvider(),
     )
 

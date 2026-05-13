@@ -215,47 +215,62 @@ class MonitoringCompany(BaseModel):
 
     ticker: str = Field(description="Ticker w formacie Stooq, np. 'dnp.pl'.")
     name: str = Field(description="Nazwa spółki.")
+    short_name: str | None = Field(
+        default=None, max_length=40,
+        description="Krótka etykieta do summary card, np. 'Synektik', 'Broker CFD'.",
+    )
+    header_meta: str | None = Field(
+        default=None, max_length=200,
+        description=(
+            "Linijka pod nazwą w sekcji: cena/mcap/ATH, np. "
+            "'~282 PLN · kap. ~2,4 mld · ATH 309,80'. Bazuj na "
+            "'Fundamentals — wskaźniki rynkowe'."
+        ),
+    )
     headline: str = Field(
         min_length=1, max_length=200,
         description="Jednolinijkowa konkluzja, np. '+71% Q2 r/r — zaskoczenie'.",
     )
-    metrics: list[MonitoringMetric] = Field(
-        min_length=3, max_length=4,
+    summary_card_tag: str | None = Field(
+        default=None, max_length=80,
         description=(
-            "3-4 metryki (preferuj 4). Pierwsza = wynik ostatniego raportu, "
+            "Krótki tag pod summary card pokazujący najbliższy event, np. "
+            "'RAPORT 15 MAJ ‼️', 'PIERWSZA WYPŁATA 26 MAJ', 'AKCELERACJA ✅'."
+        ),
+    )
+    metrics: list[MonitoringMetric] = Field(
+        min_length=2, max_length=4,
+        description=(
+            "2-4 metryki (preferuj 4). Pierwsza = wynik ostatniego raportu, "
             "ostatnia = data najbliższego raportu lub 'TBA'."
         ),
     )
     last_reading_label: str = Field(
-        min_length=1, max_length=80,
+        default="", max_length=80,
         description="Etykieta ostatniego odczytu do tabeli, np. 'RR 2025 + Q1'.",
     )
     vs_expectations: str = Field(
-        min_length=1, max_length=120,
+        default="", max_length=120,
         description="vs oczekiwań do tabeli, np. '✅ Zgodny', '❌ -20% vs kons.'.",
     )
     next_report_label: str = Field(
-        min_length=1, max_length=40,
+        default="", max_length=40,
         description="Etykieta najbliższego raportu, np. '29 MAJ 2026' lub 'TBA'.",
     )
     key_question: str = Field(
-        min_length=1, max_length=160,
+        default="", max_length=160,
         description="Kluczowe pytanie do tabeli, np. 'Marże z BGMO, dywidenda'.",
     )
     last_results_summary: str = Field(
-        min_length=80, max_length=1200,
+        min_length=1, max_length=1200,
         description=(
-            "3-5 zdań: co pokazał ostatni raport / ESPI. Gdy brak świeżych "
-            "danych — bazuj na poprzednim raporcie albo tezie. Konkretna "
-            "treść; nie pisz 'brak danych'."
+            "3-5 zdań: co pokazał ostatni raport. Cytuj BR YoY % wprost. "
+            "Dla pozycji bez danych BR (ETFy) — 1-2 zdania o tezie wystarczą."
         ),
     )
     next_catalyst_focus: str = Field(
-        min_length=80, max_length=1200,
-        description=(
-            "3-5 zdań: na co czekamy. Lista pytań (1)/(2)/(3). Bazuj na "
-            "tezie/branży gdy brak ESPI."
-        ),
+        min_length=1, max_length=1200,
+        description="3-5 zdań: na co czekamy. Pytania kluczowe.",
     )
     thesis_status: ThesisStatus = Field(description="Status tezy inwestycyjnej.")
     signal: SignalDirection = Field(
@@ -314,6 +329,42 @@ class MonitoringCalendarEntry(BaseModel):
     )
 
 
+class PortfolioWeightEntry(BaseModel):
+    """Pojedynczy wiersz w sekcji 'Struktura portfela'."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ticker: str = Field(description="Ticker w formacie Stooq.")
+    weight_label: str = Field(
+        min_length=1, max_length=20,
+        description="Etykieta wagi, np. '50,0%' albo '14,0%'.",
+    )
+    role: str = Field(
+        min_length=1, max_length=60,
+        description=(
+            "Krótki opis roli w portfelu, np. 'core dywidendowy', "
+            "'medtech growth', 'broker CFD/cycl.'."
+        ),
+    )
+
+
+class PortfolioStructure(BaseModel):
+    """Sekcja '⚖️ STRUKTURA PORTFELA — RYZYKO & KONCENTRACJA'."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    weights: list[PortfolioWeightEntry] = Field(
+        description="Wagi pozycji w portfelu, posortowane malejąco.",
+    )
+    concentration_narrative: str = Field(
+        min_length=1, max_length=2000,
+        description=(
+            "Analiza koncentracji 3-5 zdań: która pozycja dominuje, ekspozycja "
+            "sektorowa, korelacje. Konkretna i merytoryczna."
+        ),
+    )
+
+
 class MonitoringReport(BaseModel):
     """Raport monitorujący portfel — odpowiednik załączonego HTML wzoru."""
 
@@ -321,16 +372,28 @@ class MonitoringReport(BaseModel):
 
     title: str = Field(
         min_length=1, max_length=200,
-        description="Tytuł, np. 'Przegląd Portfela — Q1 2026'.",
+        description="Tytuł, np. 'Przegląd Portfela — Analiza Raportów Q1 2026'.",
     )
     subtitle: str | None = Field(
-        default=None, max_length=200, description="Opcjonalny podtytuł.",
+        default=None, max_length=200,
+        description=(
+            "Podtytuł opisujący skład, np. 'PORTFEL GPW: ETF DYWIDENDOWY + "
+            "4 SATELITY GROWTH'."
+        ),
     )
     synthesis: str = Field(
-        min_length=1, max_length=1500,
+        min_length=1, max_length=2000,
         description=(
-            "Synteza 4-6 zdań: najsilniejszy i najsłabszy sygnał, raporty "
-            "na które czekamy."
+            "Synteza 5-8 zdań: najsilniejszy + najsłabszy sygnał z BR, "
+            "nadchodzące raporty z datami, kluczowe pytania do tezy. "
+            "Konkretne tickery + liczby."
+        ),
+    )
+    portfolio_structure: PortfolioStructure | None = Field(
+        default=None,
+        description=(
+            "Opcjonalna sekcja '⚖️ Struktura portfela' z wagami i analizą "
+            "koncentracji. Pomiń (null) tylko gdy nie da się jej zbudować."
         ),
     )
     companies: list[MonitoringCompany] = Field(

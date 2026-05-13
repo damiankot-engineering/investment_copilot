@@ -20,17 +20,30 @@ SNAPSHOT_SCHEMA_VERSION: Final[str] = "1.0"
 
 
 class FundamentalsSnapshot(BaseModel):
-    """Snapshot of a company's headline fundamentals at a point in time."""
+    """Snapshot of a company's headline fundamentals at a point in time.
+
+    The ``source`` field documents WHICH data provider supplied this
+    snapshot. Downstream rendering shows a badge so the user knows the
+    data quality:
+
+    * ``biznesradar`` — primary, rich (YoY %, sector, latest narrative)
+    * ``stooq`` — best-effort scrape of Stooq snapshot panel
+    * ``ohlcv_cache`` — derived from local OHLCV parquet (price/52w only)
+    * ``empty`` — no data found anywhere
+    """
 
     model_config = ConfigDict(frozen=True)
 
     ticker: str
     name: str | None = None
+
+    # --- Price + market data (from any source) -----------------------------
     last_price: float | None = None
     market_cap: float | None = Field(
         default=None,
         description="Market capitalization in PLN (raw number, not 'mld').",
     )
+    enterprise_value: float | None = None
     pe_ratio: float | None = None
     pbv_ratio: float | None = None
     eps: float | None = None
@@ -40,6 +53,43 @@ class FundamentalsSnapshot(BaseModel):
     )
     week52_high: float | None = None
     week52_low: float | None = None
+
+    # --- BiznesRadar-rich fields (None when source is stooq/ohlcv_cache) ---
+    sector: str | None = Field(
+        default=None,
+        description="Branża/sektor wg BiznesRadar, np. 'Sieci handlowe'.",
+    )
+    latest_quarter_label: str | None = Field(
+        default=None,
+        description="Etykieta ostatniego raportowanego okresu, np. '2025/Q4' lub '2025 (gru 25)'.",
+    )
+    last_report_date: date | None = Field(
+        default=None,
+        description="Data publikacji ostatniego dostępnego raportu kwartalnego/rocznego.",
+    )
+    next_report_estimated_date: date | None = Field(
+        default=None,
+        description=(
+            "Szacowana data następnego raportu — ekstrapolowana z last_report_date "
+            "+ ~90 dni (lub +365 dla rocznych). Tylko orientacyjna."
+        ),
+    )
+    revenue_yoy_pct: float | None = Field(
+        default=None,
+        description="Procentowa zmiana przychodów r/r (np. 14.9 dla +14.9%).",
+    )
+    ebitda_yoy_pct: float | None = None
+    net_profit_yoy_pct: float | None = None
+    latest_summary: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Lista pre-computed narracyjnych podsumowań z BR, gotowych do "
+            "zacytowania przez LLM, np. ['Przychody: wzrost o 14.9% r/r', "
+            "'Zysk netto: wzrost o 3.5% r/r']."
+        ),
+    )
+
+    # --- Source attribution ------------------------------------------------
     source: str = "stooq"
     fetched_at: datetime
     source_url: str | None = None

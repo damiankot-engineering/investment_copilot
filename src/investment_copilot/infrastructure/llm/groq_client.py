@@ -97,7 +97,11 @@ class GroqClient:
         try:
             return _parse_into_schema(text, response_schema)
         except LLMValidationError as exc:
-            logger.warning("Groq JSON failed validation; requesting self-correction.")
+            logger.warning(
+                "Groq JSON failed validation; requesting self-correction. "
+                "Error: %s",
+                str(exc)[:800],
+            )
             corrective = (
                 "Your previous response did not conform to the required JSON "
                 "schema. Validation error:\n"

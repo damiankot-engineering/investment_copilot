@@ -170,9 +170,11 @@ class CopilotService:
             response_schema=MonitoringReport,
             model=self._llm_cfg.model_analysis,
             temperature=self._llm_cfg.temperature,
-            # 3500 tokens response is enough for 5-7 companies + calendar
-            # while keeping total request under Groq's per-minute caps.
-            max_tokens=3500,
+            # 4000 tokens response — needed for richer per-company narratives
+            # + portfolio_structure section. Total request stays ~11.8k <
+            # 12k TPM cap thanks to lean prompt + selectively optional
+            # schema fields (defaults instead of required min_length).
+            max_tokens=4000,
         )
 
     # -- Internal -----------------------------------------------------------

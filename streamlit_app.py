@@ -474,7 +474,7 @@ def _render_backtest_panel(result: BacktestResult) -> None:
     
     for col in df_pct.columns:
         fig.add_trace(
-            go.Scatter(x=df_pct.index, y=df_pct[col], mode="lines", name=col)
+            go.Scatter(x=df_pct.index, y=df_pct[col], mode="lines", name=col, connectgaps=True)
         )
     fig.update_layout(
         title="Equity curve (% return)",
@@ -847,7 +847,7 @@ def _view_monitoring(
         )
     with col_a:
         st.caption(f"Podgląd: `{selected.name}`")
-    st.components.v1.html(body, height=900, scrolling=True)
+    st.iframe(body, height=900)
 
 
 def _delete_monitoring_pair(report_path: Path) -> None:

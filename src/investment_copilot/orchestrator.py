@@ -282,6 +282,7 @@ class Orchestrator:
             generated_at=snapshot.generated_at,
             portfolio=portfolio,
             had_previous_snapshot=had_previous,
+            fundamentals=list(snapshot.fundamentals),
             filename=filename,
         )
 

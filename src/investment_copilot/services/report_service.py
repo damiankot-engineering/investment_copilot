@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from investment_copilot.domain.backtest import BacktestResult
+from investment_copilot.domain.fundamentals import FundamentalsSnapshot
 from investment_copilot.domain.portfolio import Portfolio, PortfolioStatus
 from investment_copilot.domain.prompts import (
     MonitoringCalendarEntry,
@@ -24,6 +25,7 @@ from investment_copilot.domain.prompts import (
     MonitoringMetric,
     MonitoringReport,
     PortfolioAnalysis,
+    PortfolioStructure,
     RiskAlerts,
 )
 
@@ -71,6 +73,7 @@ class ReportService:
         generated_at: datetime,
         portfolio: Portfolio,
         had_previous_snapshot: bool,
+        fundamentals: list[FundamentalsSnapshot] | None = None,
     ) -> str:
         """Render the monitoring report as a self-contained HTML document."""
         return _render_monitoring_html(
@@ -78,6 +81,7 @@ class ReportService:
             generated_at=generated_at,
             portfolio=portfolio,
             had_previous_snapshot=had_previous_snapshot,
+            fundamentals=fundamentals or [],
         )
 
     def write_monitoring(
@@ -87,6 +91,7 @@ class ReportService:
         generated_at: datetime,
         portfolio: Portfolio,
         had_previous_snapshot: bool,
+        fundamentals: list[FundamentalsSnapshot] | None = None,
         output_dir: Path | str | None = None,
         filename: str | None = None,
     ) -> Path:
@@ -98,6 +103,7 @@ class ReportService:
             generated_at=generated_at,
             portfolio=portfolio,
             had_previous_snapshot=had_previous_snapshot,
+            fundamentals=fundamentals,
         )
         ts = generated_at.astimezone(timezone.utc).strftime("%Y%m%d_%H%M%S")
         name = filename or f"monitoring_{ts}.html"
@@ -353,6 +359,19 @@ body { background: linear-gradient(160deg,#050810 0%,#080d1a 60%,#050810 100%); 
 .cal-body { font-size:11.5px; color:#94a3b8; line-height:1.65; }
 .cal-body strong { color:#e2e8f0; }
 .cal-ticker { font-size:10px; color:#475569; font-weight:700; margin-right:6px; }
+.co-meta { font-size:10.5px; color:#7a8aaa; margin-top:2px; }
+.structure-box { background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.07); border-radius:10px; padding:18px 22px; margin-bottom:32px; }
+.structure-weights { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:10px; margin:12px 0; }
+.weight-card { background:rgba(255,255,255,0.025); border:1px solid rgba(255,255,255,0.06); border-radius:6px; padding:10px 12px; }
+.weight-ticker { font-size:11px; font-weight:700; letter-spacing:.08em; color:#e2e8f0; }
+.weight-pct { font-size:18px; font-weight:900; color:#f3f6fb; margin:4px 0; }
+.weight-role { font-size:10px; color:#7a8aaa; }
+.structure-body { font-size:11.5px; line-height:1.85; color:#c0c9dc; margin-top:10px; }
+.src-badge { display:inline-block; padding:1px 6px; border-radius:3px; font-size:8.5px; font-weight:700; letter-spacing:.08em; }
+.src-badge.biznesradar { background:rgba(16,185,129,0.14); color:#6ee7b7; border:1px solid rgba(16,185,129,0.35); }
+.src-badge.stooq { background:rgba(245,158,11,0.14); color:#fde047; border:1px solid rgba(245,158,11,0.35); }
+.src-badge.ohlcv_cache { background:rgba(96,165,250,0.14); color:#93c5fd; border:1px solid rgba(96,165,250,0.35); }
+.src-badge.empty { background:rgba(239,68,68,0.14); color:#fca5a5; border:1px solid rgba(239,68,68,0.35); }
 .footer { padding:14px 28px; border-top:1px solid rgba(255,255,255,0.05); }
 .footer p { font-size:9px; color:#1e293b; line-height:1.6; }
 @media(max-width:760px){ .two-col, .summary-grid, .metrics-row { grid-template-columns:1fr 1fr !important; } }
@@ -442,13 +461,37 @@ def _render_change_row(co: MonitoringCompany) -> str:
     return f'<div class="change-row">{"".join(parts)}</div>'
 
 
-def _render_company(co: MonitoringCompany, idx: int) -> str:
+def _src_badge(source: str | None) -> str:
+    """Render a small data-source provenance badge."""
+    if not source:
+        return ""
+    src = source.replace("-", "_")
+    label_map = {
+        "biznesradar": "📊 BIZNESRADAR",
+        "stooq": "STOOQ",
+        "ohlcv_cache": "OHLCV CACHE",
+        "empty": "BRAK DANYCH",
+    }
+    label = label_map.get(src, source.upper())
+    return f'<span class="src-badge {src}">{_esc(label)}</span>'
+
+
+def _render_company(
+    co: MonitoringCompany,
+    idx: int,
+    *,
+    source: str | None = None,
+) -> str:
     accent, bg_card, border_card, bg_metric = _palette_for(idx)
     metrics_html = "".join(_render_metric(m, bg_metric) for m in co.metrics)
     sig = co.signal if co.signal in _SIGNAL_TO_BG else "neutral"
     sig_bg, sig_border, sig_color = _SIGNAL_TO_BG[sig]
     icon = _SIGNAL_TO_ICON.get(sig, "🟡")
 
+    meta_line = (
+        f'<div class="co-meta">{_esc(co.header_meta)}</div>'
+        if co.header_meta else ""
+    )
     return (
         '<div class="company-section">'
         '<div class="co-header">'
@@ -456,7 +499,8 @@ def _render_company(co: MonitoringCompany, idx: int) -> str:
         '<div class="co-block">'
         f'<div class="co-name" style="color:{accent}">{_esc(co.name)}</div>'
         f'<div class="co-ticker">GPW: {_esc(co.ticker.split(".")[0].upper())} · '
-        f'{_esc(co.ticker)}</div>'
+        f'{_esc(co.ticker)} &nbsp;·&nbsp; źródło: {_src_badge(source)}</div>'
+        f'{meta_line}'
         "</div>"
         f'<div class="co-badge" style="margin-left:auto;background:{bg_card};'
         f'border:1px solid {border_card};color:{accent}">'
@@ -507,25 +551,55 @@ def _render_summary_grid(companies: list[MonitoringCompany]) -> str:
             score_color = accent
 
         ticker_short = co.ticker.split(".")[0].upper()
+        display_name = co.short_name or co.name
+        # Prefer the explicit event tag; fall back to next_report_label.
+        tag_text = co.summary_card_tag or co.next_report_label
         cards.append(
             f'<div class="sum-card" style="background:{bg_card};border:1px solid {border_card}">'
-            f'<div class="sum-ticker" style="color:{accent}">{_esc(ticker_short)} · {_esc(co.name)}</div>'
+            f'<div class="sum-ticker" style="color:{accent}">{_esc(ticker_short)} · {_esc(display_name)}</div>'
             f'<div class="sum-score" style="color:{score_color}">{_esc(score)}</div>'
             f'<div class="sum-label">{_esc(score_label)}</div>'
             f'<div class="sum-tag" style="background:{bg_card};color:{accent};border:1px solid {border_card}">'
-            f'{_esc(co.next_report_label)}</div>'
+            f'{_esc(tag_text)}</div>'
             "</div>"
         )
     return f'<div class="summary-grid">{"".join(cards)}</div>'
 
 
-def _render_outlook_table(companies: list[MonitoringCompany]) -> str:
+def _render_structure(structure: PortfolioStructure | None) -> str:
+    """Render the ⚖️ STRUKTURA PORTFELA section, if provided by the LLM."""
+    if structure is None or not structure.weights:
+        return ""
+    weights_html = "".join(
+        '<div class="weight-card">'
+        f'<div class="weight-ticker">{_esc(w.ticker.split(".")[0].upper())}</div>'
+        f'<div class="weight-pct">{_esc(w.weight_label)}</div>'
+        f'<div class="weight-role">{_esc(w.role)}</div>'
+        "</div>"
+        for w in structure.weights
+    )
+    return (
+        '<div class="structure-box">'
+        '<div class="synthesis-label">⚖️ STRUKTURA PORTFELA — RYZYKO &amp; KONCENTRACJA</div>'
+        f'<div class="structure-weights">{weights_html}</div>'
+        f'<div class="structure-body">{_esc(structure.concentration_narrative)}</div>'
+        "</div>"
+    )
+
+
+def _render_outlook_table(
+    companies: list[MonitoringCompany],
+    *,
+    sources: dict[str, str] | None = None,
+) -> str:
+    sources = sources or {}
     rows: list[str] = []
     for idx, co in enumerate(companies):
         accent, _, _, _ = _palette_for(idx)
         rec = co.recommendation
         rec_bg, rec_color = _REC_PILL_COLORS.get(rec, ("rgba(148,163,184,0.12)", "#cbd5e1"))
         ticker_short = co.ticker.split(".")[0].upper()
+        src = sources.get(co.ticker, "")
         rows.append(
             "<tr>"
             f'<td style="color:{accent}">{_esc(ticker_short)}</td>'
@@ -536,6 +610,7 @@ def _render_outlook_table(companies: list[MonitoringCompany]) -> str:
             f"<td>{_esc(co.thesis_status.upper())}</td>"
             f'<td><span class="rec-pill" style="background:{rec_bg};color:{rec_color}">'
             f'{_esc(rec.upper())}</span></td>'
+            f"<td>{_src_badge(src)}</td>"
             "</tr>"
         )
     return (
@@ -545,7 +620,7 @@ def _render_outlook_table(companies: list[MonitoringCompany]) -> str:
         "<thead><tr>"
         "<th>SPÓŁKA</th><th>OSTATNI ODCZYT</th><th>vs OCZEKIWANIA</th>"
         "<th>NASTĘPNY RAPORT</th><th>KLUCZOWE PYTANIE</th>"
-        "<th>STATUS TEZY</th><th>REKOMENDACJA</th>"
+        "<th>STATUS TEZY</th><th>REKOMENDACJA</th><th>ŹRÓDŁO</th>"
         "</tr></thead>"
         f"<tbody>{''.join(rows)}</tbody>"
         "</table></div></div>"
@@ -589,6 +664,7 @@ def _render_monitoring_html(
     generated_at: datetime,
     portfolio: Portfolio,
     had_previous_snapshot: bool,
+    fundamentals: list[FundamentalsSnapshot],
 ) -> str:
     ts_utc = generated_at.astimezone(timezone.utc)
     diff_note = (
@@ -600,8 +676,10 @@ def _render_monitoring_html(
     n_pos = len(portfolio.holdings)
     date_pl = _format_date_pl(ts_utc).upper()
 
+    sources: dict[str, str] = {f.ticker: f.source for f in fundamentals}
     companies_html = "".join(
-        _render_company(co, idx) for idx, co in enumerate(report.companies)
+        _render_company(co, idx, source=sources.get(co.ticker))
+        for idx, co in enumerate(report.companies)
     )
 
     return (
@@ -625,13 +703,15 @@ def _render_monitoring_html(
         '<div class="main">'
         # Synthesis
         '<div class="synthesis-box">'
-        '<div class="synthesis-label">💭 SYNTEZA — CO MÓWIĄ NAJNOWSZE DANE</div>'
+        '<div class="synthesis-label">🔭 SYNTEZA — CO MÓWIĄ NAJNOWSZE DANE</div>'
         f'<div class="synthesis-body">{_esc(report.synthesis)}</div>'
         "</div>"
+        # Portfolio structure (optional)
+        f"{_render_structure(report.portfolio_structure)}"
         # Per-company sections
         f"{companies_html}"
         # Outlook table
-        f"{_render_outlook_table(report.companies)}"
+        f"{_render_outlook_table(report.companies, sources=sources)}"
         # Calendar
         f"{_render_calendar(report.calendar)}"
         "</div>"

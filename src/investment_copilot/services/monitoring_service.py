@@ -32,9 +32,13 @@ from investment_copilot.domain.models import NewsItem, normalize_ticker
 from investment_copilot.domain.portfolio import Portfolio, PortfolioStatus
 from investment_copilot.domain.prompts import MonitoringReport
 from investment_copilot.infrastructure.providers.base import ProviderError
+from investment_copilot.infrastructure.providers.biznesradar import (
+    BiznesRadarProvider,
+)
 from investment_copilot.infrastructure.providers.stooq_fundamentals import (
     StooqFundamentalsProvider,
 )
+from investment_copilot.infrastructure.storage import SQLiteStore
 from investment_copilot.services.copilot_service import CopilotService
 from investment_copilot.services.data_service import DataService
 from investment_copilot.services.portfolio_service import PortfolioService
@@ -47,6 +51,8 @@ SNAPSHOTS_DIRNAME: str = "snapshots"
 MAX_NEWS_REFS_PER_TICKER: int = 8
 LATEST_FALLBACK_LIMIT: int = 5  # if window is empty, take this many newest
 WEEK52_TRADING_DAYS: int = 252
+FUNDAMENTALS_CACHE_TTL: timedelta = timedelta(hours=24)
+ESPI_CACHE_TTL: timedelta = timedelta(hours=24)
 
 
 class MonitoringService:
@@ -58,12 +64,16 @@ class MonitoringService:
         copilot_service: CopilotService,
         data_service: DataService,
         portfolio_service: PortfolioService,
+        sqlite_store: SQLiteStore,
+        biznesradar_provider: BiznesRadarProvider | None = None,
         fundamentals_provider: StooqFundamentalsProvider | None = None,
         snapshots_dir: Path | str = "reports/monitoring/snapshots",
     ) -> None:
         self._copilot = copilot_service
         self._data = data_service
         self._portfolio_svc = portfolio_service
+        self._sqlite = sqlite_store
+        self._biznesradar = biznesradar_provider or BiznesRadarProvider()
         self._fundamentals = fundamentals_provider or StooqFundamentalsProvider()
         self.snapshots_dir = Path(snapshots_dir)
 
@@ -153,23 +163,37 @@ class MonitoringService:
     ) -> list[FundamentalsSnapshot]:
         """Build per-ticker fundamentals snapshots.
 
-        Strategy: try the HTML scraper (best-effort), then ALWAYS augment
-        with values derived from the local OHLCV cache (last_price,
-        52-week range). Stooq's snapshot panel is now JS-rendered so the
-        scraper typically returns all-None — the OHLCV-derived fields are
-        the reliable backbone that lets the LLM ground its analysis.
+        Strategy (per ticker):
+
+        1. **BiznesRadar (primary)** — rich data with sector, YoY %s,
+           last report date, latest narrative bullets. Cached 24h in SQLite.
+        2. **Stooq fundamentals (fallback)** — best-effort HTML scrape.
+           Usually all-None since Stooq moved to JS rendering.
+        3. **OHLCV cache (last resort)** — provides last_price + 52w range
+           derived from local parquet.
+
+        The :attr:`FundamentalsSnapshot.source` field records which tier
+        won. OHLCV-derived price/52w is ALWAYS merged in last (most reliable
+        local source for those specific fields).
         """
         out: list[FundamentalsSnapshot] = []
         for h in portfolio.holdings:
-            scraped: FundamentalsSnapshot | None = None
-            try:
-                scraped = self._fundamentals.fetch_snapshot(h.ticker)
-            except ProviderError as exc:
-                logger.info("Fundamentals scrape failed for %s: %s", h.ticker, exc)
+            primary = self._fetch_biznesradar_cached(h.ticker, warnings)
+
+            if primary is None:
+                # Fall back to Stooq HTML scraper
+                try:
+                    primary = self._fundamentals.fetch_snapshot(h.ticker)
+                except ProviderError as exc:
+                    logger.info(
+                        "Stooq fundamentals fallback failed for %s: %s",
+                        h.ticker, exc,
+                    )
 
             ohlcv_fields = self._fundamentals_from_ohlcv(h.ticker, holding_name=h.name)
 
-            if scraped is None:
+            if primary is None:
+                # Last resort — OHLCV-only snapshot, or fully empty
                 if ohlcv_fields is None:
                     warnings.append(
                         f"Brak danych fundamentals i OHLCV dla {h.ticker} — "
@@ -187,23 +211,54 @@ class MonitoringService:
                 out.append(ohlcv_fields)
                 continue
 
-            # Merge: scraped fields take priority where present, OHLCV fills gaps.
-            merged = scraped.model_copy(
+            # Merge: primary keeps its rich fields; OHLCV fills price/52w when
+            # primary doesn't have them (BR intentionally skips last_price).
+            merged = primary.model_copy(
                 update={
-                    "name": scraped.name or h.name or (ohlcv_fields.name if ohlcv_fields else None),
-                    "last_price": scraped.last_price
-                    if scraped.last_price is not None
+                    "name": primary.name or h.name
+                        or (ohlcv_fields.name if ohlcv_fields else None),
+                    "last_price": primary.last_price
+                    if primary.last_price is not None
                     else (ohlcv_fields.last_price if ohlcv_fields else None),
-                    "week52_high": scraped.week52_high
-                    if scraped.week52_high is not None
+                    "week52_high": primary.week52_high
+                    if primary.week52_high is not None
                     else (ohlcv_fields.week52_high if ohlcv_fields else None),
-                    "week52_low": scraped.week52_low
-                    if scraped.week52_low is not None
+                    "week52_low": primary.week52_low
+                    if primary.week52_low is not None
                     else (ohlcv_fields.week52_low if ohlcv_fields else None),
                 }
             )
             out.append(merged)
         return out
+
+    def _fetch_biznesradar_cached(
+        self, ticker: str, warnings: list[str]
+    ) -> FundamentalsSnapshot | None:
+        """Fetch BR fundamentals, with 24h SQLite cache. Returns None on failure."""
+        cache_key = f"biznesradar:fundamentals:{normalize_ticker(ticker)}"
+        cached_json = self._sqlite.cache_get(cache_key, max_age=FUNDAMENTALS_CACHE_TTL)
+        if cached_json:
+            try:
+                return FundamentalsSnapshot.model_validate_json(cached_json)
+            except ValueError as exc:
+                logger.warning("Cached BR fundamentals invalid for %s: %s", ticker, exc)
+
+        try:
+            snap = self._biznesradar.fetch_fundamentals(ticker)
+        except ProviderError as exc:
+            logger.info("BR fundamentals failed for %s: %s", ticker, exc)
+            warnings.append(
+                f"BiznesRadar niedostępny dla {ticker} ({exc}) — używam fallbacku."
+            )
+            return None
+
+        # Persist for the next 24h
+        try:
+            self._sqlite.cache_set(cache_key, snap.model_dump_json())
+        except Exception as exc:  # pragma: no cover
+            logger.warning("Failed to cache BR for %s: %s", ticker, exc)
+
+        return snap
 
     def _fundamentals_from_ohlcv(
         self, ticker: str, *, holding_name: str | None
@@ -250,7 +305,11 @@ class MonitoringService:
         days_back: int,
         warnings: list[str],
     ) -> None:
-        """Force a news refresh from configured providers before reading cache."""
+        """Force a news refresh from configured providers before reading cache.
+
+        Also pulls BiznesRadar ESPI announcements per ticker (cached 24h)
+        and inserts them into the news cache alongside Stooq + RSS items.
+        """
         since = datetime.now(timezone.utc) - timedelta(days=max(0, days_back))
         try:
             keywords = self._portfolio_svc.keywords_map(portfolio)
@@ -259,6 +318,51 @@ class MonitoringService:
         except Exception as exc:
             logger.warning("Monitoring news refresh failed: %s", exc)
             warnings.append(f"News refresh failed: {exc}")
+
+        # Pull BR ESPI per-ticker (independent of Stooq/RSS path)
+        br_inserted = 0
+        for h in portfolio.holdings:
+            try:
+                items = self._fetch_br_espi_cached(h.ticker, since=since)
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning("BR ESPI failed for %s: %s", h.ticker, exc)
+                continue
+            if items:
+                br_inserted += self._sqlite.upsert_news(items)
+        if br_inserted:
+            logger.info("Monitoring: BR ESPI inserted %d items", br_inserted)
+
+    def _fetch_br_espi_cached(
+        self, ticker: str, *, since: datetime
+    ) -> list[NewsItem]:
+        """Fetch BR ESPI for a ticker with 24h cache."""
+        cache_key = f"biznesradar:espi:{normalize_ticker(ticker)}"
+        cached_json = self._sqlite.cache_get(cache_key, max_age=ESPI_CACHE_TTL)
+        if cached_json is not None:
+            try:
+                payload = json.loads(cached_json)
+                items = [NewsItem.model_validate(p) for p in payload]
+                # Filter by since here (cache stores full set; consumer may
+                # have a different window each call).
+                since_aware = since if since.tzinfo else since.replace(tzinfo=timezone.utc)
+                return [i for i in items if i.published_at >= since_aware]
+            except (ValueError, KeyError) as exc:
+                logger.warning("Cached BR ESPI invalid for %s: %s", ticker, exc)
+
+        try:
+            items = self._biznesradar.fetch_espi(ticker, since=since)
+        except ProviderError as exc:
+            logger.info("BR ESPI fetch failed for %s: %s", ticker, exc)
+            return []
+
+        try:
+            self._sqlite.cache_set(
+                cache_key,
+                json.dumps([i.model_dump(mode="json") for i in items]),
+            )
+        except Exception as exc:  # pragma: no cover
+            logger.warning("Failed to cache BR ESPI for %s: %s", ticker, exc)
+        return items
 
     def _collect_news(
         self,

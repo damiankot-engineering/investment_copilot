@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable, Iterator
 
@@ -38,6 +38,12 @@ CREATE TABLE IF NOT EXISTS ohlcv_meta (
     last_fetched_at TEXT NOT NULL,
     earliest_date   TEXT,
     latest_date     TEXT
+);
+
+CREATE TABLE IF NOT EXISTS kv_cache (
+    cache_key     TEXT PRIMARY KEY,
+    payload_json  TEXT NOT NULL,
+    fetched_at    TEXT NOT NULL              -- ISO8601 UTC
 );
 """
 
@@ -175,3 +181,39 @@ class SQLiteStore:
                 (ticker,),
             ).fetchone()
         return dict(row) if row else None
+
+    # -- Generic KV cache (used for slow external scrapes) ------------------
+
+    def cache_set(self, key: str, payload_json: str) -> None:
+        """Store ``payload_json`` under ``key``, overwriting any prior entry."""
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO kv_cache (cache_key, payload_json, fetched_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(cache_key) DO UPDATE SET
+                    payload_json = excluded.payload_json,
+                    fetched_at = excluded.fetched_at
+                """,
+                (key, payload_json, _to_iso(datetime.now(timezone.utc))),
+            )
+
+    def cache_get(self, key: str, *, max_age: timedelta) -> str | None:
+        """Return the cached payload for ``key`` if fresher than ``max_age``."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT payload_json, fetched_at FROM kv_cache WHERE cache_key = ?",
+                (key,),
+            ).fetchone()
+        if not row:
+            return None
+        try:
+            fetched_at = _from_iso(row["fetched_at"])
+        except (TypeError, ValueError):
+            return None
+        if fetched_at.tzinfo is None:
+            fetched_at = fetched_at.replace(tzinfo=timezone.utc)
+        age = datetime.now(timezone.utc) - fetched_at
+        if age > max_age:
+            return None
+        return row["payload_json"]

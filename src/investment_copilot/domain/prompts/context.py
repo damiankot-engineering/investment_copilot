@@ -80,10 +80,8 @@ def render_status(status: PortfolioStatus) -> str:
         "## Current status",
         f"As of: {status.as_of.strftime('%Y-%m-%d %H:%M UTC')}  "
         f"Base currency: {status.base_currency}",
-        f"Total cost basis (all):       {status.total_cost_basis:>14,.2f}",
-        f"Priced cost basis:            {status.priced_cost_basis:>14,.2f}",
-        f"Total market value:           {status.total_market_value:>14,.2f}",
-        f"Unrealized PnL:               {status.total_unrealized_pnl:>+14,.2f}  "
+        f"Total market value:  {status.total_market_value:>14,.2f}",
+        f"Unrealized PnL:      {status.total_unrealized_pnl:>+14,.2f}  "
         f"({status.total_unrealized_pnl_pct * 100:+.2f}%)",
     ]
     if status.missing_data:
@@ -92,15 +90,25 @@ def render_status(status: PortfolioStatus) -> str:
         )
     lines.append("")
     lines.append(
-        "| Ticker | Last | Date | Value | Unrealized PnL | PnL% |"
+        "| Ticker | Last | Value | Waga portfela | PnL% |"
     )
-    lines.append("|---|---:|---|---:|---:|---:|")
+    lines.append("|---|---:|---:|---:|---:|")
+    total_mv = status.total_market_value or 0.0
     for s in status.holdings:
-        lines.append(_status_row(s))
+        if not s.has_price:
+            lines.append(f"| {s.ticker} | — | — | — | — |")
+            continue
+        weight = (s.market_value / total_mv * 100) if total_mv > 0 else 0.0
+        lines.append(
+            f"| {s.ticker} | {s.last_price:.2f} | "
+            f"{s.market_value:,.2f} | **{weight:.1f}%** | "
+            f"{s.unrealized_pnl_pct * 100:+.2f}% |"
+        )
     return "\n".join(lines)
 
 
 def _status_row(s: HoldingStatus) -> str:
+    """Legacy single-row formatter (kept for any external callers)."""
     if not s.has_price:
         return f"| {s.ticker} | — | — | — | — | — |"
     return (
@@ -206,14 +214,22 @@ def build_portfolio_context(
 
 
 def render_fundamentals(snapshots: Sequence[FundamentalsSnapshot]) -> str:
-    """Render the latest fundamentals panel for the prompt context."""
+    """Render the latest fundamentals panel for the prompt context.
+
+    Output has TWO sections:
+
+    * Compact ratios table (Mcap, P/E, P/BV, EPS, 52w, source)
+    * Per-ticker BiznesRadar narrative block — pre-computed YoY % changes,
+      sector, last/next report dates, ready-to-quote bullets. This is what
+      the LLM should base on (no need to invent numbers).
+    """
     if not snapshots:
         return "## Fundamentals\n_(brak danych — provider nie zwrócił snapshotów)_"
 
     lines = [
-        "## Fundamentals",
-        "| Ticker | Nazwa | Cena | Mcap (PLN) | P/E | P/BV | EPS | Stopa dyw. | 52w (low–high) | Źródło |",
-        "|---|---|---:|---:|---:|---:|---:|---:|---|---|",
+        "## Fundamentals — wskaźniki rynkowe",
+        "| Ticker | Nazwa | Cena | Mcap (PLN) | P/E | P/BV | EPS | 52w (low–high) | Źródło |",
+        "|---|---|---:|---:|---:|---:|---:|---|---|",
     ]
     for s in snapshots:
         mcap = f"{s.market_cap:,.0f}" if s.market_cap is not None else "—"
@@ -221,7 +237,6 @@ def render_fundamentals(snapshots: Sequence[FundamentalsSnapshot]) -> str:
         pe = f"{s.pe_ratio:.2f}" if s.pe_ratio is not None else "—"
         pbv = f"{s.pbv_ratio:.2f}" if s.pbv_ratio is not None else "—"
         eps = f"{s.eps:.2f}" if s.eps is not None else "—"
-        dy = f"{s.dividend_yield * 100:.2f}%" if s.dividend_yield is not None else "—"
         if s.week52_low is not None and s.week52_high is not None:
             band = f"{s.week52_low:.2f}–{s.week52_high:.2f}"
         else:
@@ -229,8 +244,42 @@ def render_fundamentals(snapshots: Sequence[FundamentalsSnapshot]) -> str:
         name = (s.name or "—").replace("|", "/")
         lines.append(
             f"| {s.ticker} | {name} | {price} | {mcap} | {pe} | {pbv} | "
-            f"{eps} | {dy} | {band} | {s.source} |"
+            f"{eps} | {band} | **{s.source}** |"
         )
+
+    # BR-rich narrative section — only printed for tickers with rich data
+    rich = [s for s in snapshots if s.source == "biznesradar"]
+    if rich:
+        lines.append("")
+        lines.append("## Fundamentals — narracja BiznesRadar (cytuj wartości WPROST)")
+        for s in rich:
+            lines.append("")
+            sector = s.sector or "—"
+            lq = s.latest_quarter_label or "—"
+            last_rep = s.last_report_date.isoformat() if s.last_report_date else "—"
+            next_rep = (
+                s.next_report_estimated_date.isoformat()
+                if s.next_report_estimated_date else "—"
+            )
+            lines.append(
+                f"### {s.ticker} — {s.name or '—'} (sektor: {sector})"
+            )
+            lines.append(
+                f"- Ostatni raport: **{lq}** (publikacja {last_rep}) · "
+                f"Szacowany następny raport: **{next_rep}** (orientacyjnie)"
+            )
+            yoy_parts = []
+            if s.revenue_yoy_pct is not None:
+                yoy_parts.append(f"przychody {s.revenue_yoy_pct:+.2f}% r/r")
+            if s.ebitda_yoy_pct is not None:
+                yoy_parts.append(f"EBITDA {s.ebitda_yoy_pct:+.2f}% r/r")
+            if s.net_profit_yoy_pct is not None:
+                yoy_parts.append(f"zysk netto {s.net_profit_yoy_pct:+.2f}% r/r")
+            if yoy_parts:
+                lines.append(f"- YoY: {' · '.join(yoy_parts)}")
+            for bullet in s.latest_summary[:6]:
+                lines.append(f"- {bullet}")
+
     return "\n".join(lines)
 
 

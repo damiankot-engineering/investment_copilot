@@ -202,8 +202,9 @@ class StooqFundamentalsProvider:
         )
 
         # If literally everything is None, the page likely didn't render the
-        # snapshot panel (rate limit / layout change). Log so we can detect
-        # it but still return the empty snapshot for the LLM to work with.
+        # snapshot panel (rate limit / JS rendering / unsupported instrument).
+        # Raise so the caller can fall back to a different source instead of
+        # passing a hollow snapshot with a misleading "source=stooq" tag.
         if all(
             getattr(snapshot, f) is None
             for f in (
@@ -214,10 +215,9 @@ class StooqFundamentalsProvider:
                 "week52_high",
             )
         ):
-            logger.warning(
-                "Stooq fundamentals: no fields parsed for %s "
-                "(layout change or block?)",
-                symbol,
+            raise ProviderError(
+                f"Stooq returned an empty snapshot panel for {symbol} "
+                "(likely JS-rendered or unsupported)"
             )
 
         return snapshot
