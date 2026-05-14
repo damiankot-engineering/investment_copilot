@@ -23,7 +23,7 @@ Designed to be:
 - **Portfolio tracking** — define holdings in `portfolio.yaml` with shares, entry price, entry date, investment thesis, optional name and news keywords.
 - **Free, fast data** — daily OHLCV from Stooq for any GPW ticker (free API key required, see [API keys](#api-keys)). Indices (`wig20`, `mwig40`, etc.) and equities are queried through the same adapter.
 - **News aggregation** — multiple Polish RSS feeds plus best-effort scraping of Stooq's per-symbol news block. Persisted in SQLite, deduplicated by URL, queryable per ticker.
-- **Backtesting** — portfolio-level simulator with two strategies (MA-crossover, time-series momentum). Equal-weight across active sleeves, daily checks, end-of-day fills, no leverage, no shorts, zero costs (v1). Equity curve and a full metrics suite (total / annualized return, volatility, Sharpe @ 252, max drawdown with duration, win rate). WIG20 buy-and-hold benchmark in the same window.
+- **Backtesting** — portfolio-level simulator with three strategies (MA-crossover, time-series momentum, buy & hold). Equal-weight across active sleeves, daily checks, end-of-day fills, no leverage, no shorts, zero costs (v1). Equity curve and a full metrics suite (total / annualized return, volatility, Sharpe @ 252, max drawdown with duration, win rate). Configurable benchmark (`wig20` / `mwig40` / `swig80` / `wig` / `wig30` / arbitrary Stooq ticker) buy-and-hold in the same window.
 - **Groq copilot** — three structured analyses with Polish output: portfolio summary, risk alerts, thesis update. JSON-mode + Pydantic validation, automatic self-correction on schema violations, exponential backoff on transient errors, fast-fail on auth errors.
 - **CLI** — Typer-based commands (`update-data`, `run-analysis`, `backtest`, `generate-report`) with Rich-rendered tables, severity-coloured risk panels, sensible exit codes, and graceful degradation when the LLM is unreachable.
 - **Markdown reports** — generated to `reports/`, fully Polish, with portfolio table, backtest metrics vs benchmark, AI sections, and warnings.
@@ -38,7 +38,7 @@ Designed to be:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  ENTRYPOINTS         CLI (Typer)         [future] FastAPI       │
+│  ENTRYPOINTS         CLI (Typer)   Streamlit GUI   FastAPI + UI │
 │                          │                        │             │
 │                          ▼                        ▼             │
 ├─────────────────────────────────────────────────────────────────┤
@@ -91,32 +91,49 @@ investment-copilot/
 ├── config.example.yaml
 ├── portfolio.example.yaml
 ├── .env.example
-├── data/                            # gitignored (cache + parquet)
-├── reports/                         # gitignored (Markdown reports)
+├── streamlit_app.py                  # Streamlit GUI entrypoint
+├── data/                             # gitignored (cache + parquet)
+├── reports/                          # gitignored (Markdown + monitoring HTML)
 ├── src/investment_copilot/
-│   ├── cli.py                       # Typer app
-│   ├── orchestrator.py              # named pipelines
-│   ├── config/                      # AppConfig + loader
+│   ├── cli.py                        # Typer app
+│   ├── orchestrator.py               # named pipelines
+│   ├── config/                       # AppConfig + loader
 │   ├── domain/
-│   │   ├── models.py                # core types (Ticker, NewsItem, ...)
-│   │   ├── portfolio.py             # Holding, Portfolio, status models
-│   │   ├── strategies/              # MACrossover, Momentum, factory
-│   │   ├── backtest/                # engine, metrics, results
-│   │   └── prompts/                 # context builder, schemas, templates
+│   │   ├── models.py                 # core types (Ticker, NewsItem, ...)
+│   │   ├── portfolio.py              # Holding, Portfolio, status models
+│   │   ├── fundamentals.py           # fundamentals + monitoring snapshots
+│   │   ├── strategies/               # MACrossover, Momentum, BuyAndHold
+│   │   ├── backtest/                 # engine, metrics, results
+│   │   └── prompts/                  # context builder, schemas, templates
 │   ├── infrastructure/
-│   │   ├── providers/               # Stooq, RSS, factory
-│   │   ├── llm/                     # GroqClient, factory, errors
-│   │   ├── storage/                 # SQLite + parquet
+│   │   ├── providers/                # Stooq, RSS, BiznesRadar, factory
+│   │   ├── llm/                      # GroqClient, factory, errors
+│   │   ├── storage/                  # SQLite + parquet
 │   │   └── logging.py
-│   └── services/
-│       ├── data_service.py
-│       ├── portfolio_service.py
-│       ├── backtest_service.py
-│       ├── copilot_service.py
-│       ├── report_service.py
-│       ├── container.py             # ServiceContainer factory
-│       └── pipeline_results.py
-└── tests/                           # 208 tests
+│   ├── services/
+│   │   ├── data_service.py
+│   │   ├── portfolio_service.py
+│   │   ├── backtest_service.py
+│   │   ├── copilot_service.py
+│   │   ├── monitoring_service.py
+│   │   ├── report_service.py
+│   │   ├── container.py              # ServiceContainer factory
+│   │   └── pipeline_results.py
+│   ├── gui/                          # Streamlit helpers (formatters, frames)
+│   └── api/                          # FastAPI app
+│       ├── main.py                   # app factory + all routes
+│       ├── schemas.py                # wire DTOs
+│       ├── adapters.py               # domain → DTO conversions
+│       └── deps.py                   # FastAPI dependencies
+├── src/frontend/                     # Web GUI (CDN React, no build step)
+│   ├── index.html                    # Tailwind via CDN, Babel-transpiled JSX
+│   └── src/
+│       ├── app.jsx                   # tab shell + state
+│       ├── api.jsx                   # window.API fetch wrappers
+│       ├── portfolio.jsx · backtest.jsx · analysis.jsx
+│       ├── reports.jsx · monitoring.jsx
+│       └── primitives.jsx · sidebar.jsx · icons.jsx · mockData.jsx
+└── tests/                            # 208 tests
 ```
 
 ---
@@ -151,6 +168,31 @@ After install, the `invcopilot` command is available on `PATH`:
 uv run invcopilot version
 # investment-copilot 0.1.0
 ```
+
+### Web GUI (FastAPI + React, optional)
+
+A polished single-page web dashboard is available as an alternative to the Streamlit GUI. The backend is a thin FastAPI layer over the same orchestrator pipelines the CLI uses; the frontend is a CDN-served React app in `src/frontend/` (no build step). They run in one process on `http://localhost:8000`.
+
+```bash
+# install with the API extra
+uv pip install -e ".[api]"
+
+# run (opens http://localhost:8000 — frontend mounted at /, API at /api/*)
+uv run uvicorn investment_copilot.api.main:app --port 8000
+# OpenAPI docs at http://localhost:8000/docs
+```
+
+The web GUI exposes the same pipelines as the CLI:
+
+| Tab | Endpoint(s) it calls | Equivalent CLI |
+|---|---|---|
+| 📊 **Portfolio** | `GET/PUT /api/portfolio`, `GET /api/portfolio/status`, `POST /api/data/update` | `update-data` + status |
+| 📈 **Backtest** | `POST /api/backtest` | `backtest` |
+| ✨ **AI Analysis** | `POST /api/analysis` | `run-analysis` |
+| 📄 **Reports** | `GET/POST /api/reports`, `GET /api/reports/{name}` | `generate-report` |
+| 👁️ **Monitoring** | `POST /api/monitoring`, `GET /api/monitoring/reports` | _(web GUI only — no CLI command in v1)_ |
+
+Single-user, no auth, offline-friendly. Same `config.yaml`, `portfolio.yaml`, and `GROQ_API_KEY` env var as the CLI. Override paths via `COPILOT_CONFIG` and `COPILOT_PORTFOLIO`.
 
 ### Streamlit GUI (optional)
 
@@ -395,7 +437,7 @@ invcopilot backtest -s momentum --no-benchmark
 
 | Flag | Default | Description |
 |---|---|---|
-| `--strategy`, `-s` | `ma_crossover` | One of `ma_crossover`, `momentum`. |
+| `--strategy`, `-s` | `ma_crossover` | One of `ma_crossover`, `momentum`, `buy_and_hold`. |
 | `--no-benchmark` | false | Skip WIG20 buy-and-hold benchmark column. |
 
 #### `invcopilot generate-report`
@@ -487,55 +529,45 @@ $ cat reports/weekly.md
 
 ---
 
-## Future FastAPI notes
+## Web API reference
 
-The architecture is FastAPI-ready by design. Adding HTTP routes is a one-file change because every service already accepts Pydantic inputs and returns Pydantic outputs.
+The FastAPI app at `investment_copilot.api.main:app` exposes every orchestrator pipeline as an HTTP endpoint, plus a handful of helpers for reading the active config and listing existing report files. The dashboard at `src/frontend/` is mounted at `/`; OpenAPI docs are at `/docs`.
 
-### What's already in place
+### Endpoints
 
-- **`ServiceContainer`** is the single wiring point. Both the CLI and a future `Depends(get_container)` will use it.
-- **All pipeline outputs are Pydantic** (`AnalysisBundle`, `FullReport`, `BacktestResult`, etc.). They serialize to JSON via `.model_dump_json()` out of the box.
-- **No global state.** Services are constructed fresh from config; tests prove they're independently mountable.
-- **No `print` in services.** Everything goes through stdlib `logging`; integrating with `uvicorn`'s log config is a single line.
+| Method | Path | Body / query | Returns |
+|---|---|---|---|
+| GET | `/api/health` | — | `{status, version}` |
+| GET | `/api/config` | — | active `benchmark`, `backtest_start_date/end_date`, list of selectable benchmarks |
+| GET | `/api/strategies` | — | `[{value, label}, …]` |
+| GET | `/api/portfolio` | — | `PortfolioDTO` (holdings as the frontend sees them) |
+| PUT | `/api/portfolio` | `PortfolioDTO` | round-trips through `Portfolio` validators and writes `portfolio.yaml` (with `.bak`) |
+| GET | `/api/portfolio/status` | — | `PortfolioStatusDTO` with live PnL per holding |
+| POST | `/api/data/update` | `?news_days_back=14` | `DataUpdateResult` (OHLCV updated/failed, benchmark rows, news inserted) |
+| POST | `/api/backtest` | `?strategy=&benchmark=&start_date=&end_date=&include_benchmark=` | `BacktestResultDTO` (% return curve, drawdown, metrics) |
+| POST | `/api/analysis` | `?include_risks=true&news_days_back=14` | `AnalysisBundleDTO` (status + Polish summary + risk alerts) |
+| GET / POST | `/api/reports` | `GenerateReportRequest` on POST | list of reports / a new report |
+| GET | `/api/reports/{name}` | — | report content as Markdown |
+| GET | `/api/reports/{name}/download` | — | file download |
+| POST | `/api/monitoring` | `RunMonitoringRequest` | `MonitoringSnapshotDTO` (items + historical reports + full `MonitoringReport`) |
+| GET | `/api/monitoring/reports` | — | list of monitoring HTML files |
+| GET | `/api/monitoring/reports/{name}` | — | rendered HTML |
 
-### Sketch of the future API layer
+### Design notes
 
-```python
-# src/investment_copilot/api/main.py  (NOT in v1)
-from fastapi import Depends, FastAPI
-from investment_copilot.config import load_config
-from investment_copilot.services import ServiceContainer, build_container, load_portfolio
-from investment_copilot.orchestrator import Orchestrator
-from investment_copilot.services.pipeline_results import AnalysisBundle, FullReport
-from investment_copilot.domain.backtest import BacktestResult
-
-app = FastAPI(title="Investment Copilot")
-
-def get_container() -> ServiceContainer:
-    return build_container(load_config("config.yaml"))
-
-def get_orchestrator(c: ServiceContainer = Depends(get_container)) -> Orchestrator:
-    return Orchestrator(c)
-
-@app.post("/analysis", response_model=AnalysisBundle)
-def run_analysis(orch: Orchestrator = Depends(get_orchestrator)):
-    portfolio = load_portfolio(orch._container.config.portfolio.path)
-    return orch.run_analysis(portfolio)
-
-@app.post("/backtest", response_model=BacktestResult)
-def backtest(strategy: str, orch: Orchestrator = Depends(get_orchestrator)):
-    portfolio = load_portfolio(orch._container.config.portfolio.path)
-    return orch.backtest(portfolio, strategy_name=strategy)
-```
+- **Single wiring point.** Both the CLI and the API construct the same `ServiceContainer` via `build_container(load_config(...))`. The API caches it process-wide with `functools.lru_cache`.
+- **Wire DTOs decouple frontend from domain.** Domain models use field names like `total_market_value` / `unrealized_pnl_pct` (fractions); the frontend sees `total_value` / `pnl_pct` (percent). Adapters in `api/adapters.py` translate at the wire boundary so neither side has to care about the other's naming. Tickers come back in both forms (`ticker: 'pkn.pl'`, `display_ticker: 'PKN'`).
+- **Sync internals, threaded boundary.** Services and providers are synchronous (Stooq, Groq, BiznesRadar). The API wraps every pipeline call in `asyncio.to_thread`, which is enough for single-user local use. If you ever expose this beyond localhost, replace providers with async-native clients rather than keeping the thread pool growing.
+- **Static frontend co-served.** `StaticFiles(directory=src/frontend, html=True)` is mounted at `/`, so opening `http://localhost:8000` loads `index.html` which then calls `/api/*` on the same origin — no CORS needed in production. CORS is enabled for `localhost:5173` and `localhost:8000` to support split-host dev.
+- **Path overrides via env.** `COPILOT_CONFIG` and `COPILOT_PORTFOLIO` work the same as for the CLI; resolved once at startup.
+- **Filename safety.** All `*/reports/{name}` routes validate `name` against `^[A-Za-z0-9._-]+$` and reject `..`, so a malicious client can't escape the reports directory.
 
 ### What v1 deliberately doesn't have
 
-- No auth (single-user assumed). Any production API would add an auth dependency.
-- No async. The current LLM/HTTP calls are synchronous — for an API exposed to multiple clients, providers should be wrapped with `asyncio.to_thread` or replaced with async equivalents.
-- No background scheduler. `update-data` is on-demand; an API deployment would likely want a periodic refresh job (cron, APScheduler, etc.).
-- No persistence of analysis history. The copilot is read-only by design in v1.
-
-These are easy to add when the time comes; none of them require restructuring.
+- **No auth.** Single-user assumed. Bind to `127.0.0.1` (uvicorn default with `--host` unset is `127.0.0.1`); do not expose this directly to the internet without adding an auth dependency.
+- **No streaming progress.** `update-data` and `analysis` can take 5–60 s; the UI shows a spinner and waits for the full response. Add SSE / WebSockets if you want incremental feedback.
+- **No background scheduler.** `update-data` is on-demand. A deployment would add cron / APScheduler.
+- **No persistence of analysis history.** Each `/api/analysis` call hits Groq fresh. Reports and monitoring snapshots are persisted to disk; AI summaries inside them are not separately stored.
 
 ---
 

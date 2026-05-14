@@ -1,5 +1,6 @@
 base_currency: PLN
 holdings:
+
 - ticker: etfbdivpl.pl
   shares: 54.0
   entry_price: 261.15
@@ -15,9 +16,10 @@ holdings:
   - WIGdivplus
   - Dywidenda
   - ETF GPW
+
 - ticker: dig.pl
   shares: 16.0
-  entry_price: 199.8
+  entry_price: 200.0
   entry_date: '2026-05-01'
   thesis: "Digital Network to „toll road\" na transformację cyfrową polskiej reklamy\
     \ zewnętrznej. \nDOOH w Polsce to zaledwie 28% rynku OOH — docelowo 40–60% jak\
@@ -34,8 +36,9 @@ holdings:
   - DOOH
   - Digital Signage
   - outdoor advertising
+
 - ticker: snt.pl
-  shares: 14.0
+  shares: 13.0
   entry_price: 282.6
   entry_date: '2026-05-01'
   thesis: 'Synektik to „toll road" na robotyzację chirurgii w CEE — wyłączny dystrybutor
@@ -79,9 +82,10 @@ holdings:
   - PACS
   - Intuitive Surgical
   - Syn2bio
+
 - ticker: cbf.pl
-  shares: 17.0
-  entry_price: 178.5
+  shares: 18.0
+  entry_price: 175.79
   entry_date: '2026-05-01'
   thesis: 'cyber_Folks to polska odpowiedź na GoDaddy + Shopify + Braze — rosnące
     imperium usług
@@ -128,9 +132,10 @@ holdings:
   - MailerLite
   - CPaaS
   - R22
+
 - ticker: xtb.pl
   shares: 38.0
-  entry_price: 100.52
+  entry_price: 108.08
   entry_date: '2026-05-08'
   thesis: 'XTB to świadoma inwestycja w długoterminowy compounding przez budowę globalnej
     platformy
@@ -155,7 +160,7 @@ holdings:
     Kluczowe ryzyka: cykliczność CFD (Q3 2025: -74% zysku r/r), regulacje ESMA wokół
     CFD,
 
-    KNF kara 20M PLN (nieostateczna).'
+    KNF kara 20M PLN.'
   name: XTB SA (X-Trade Brokers)
   keywords:
   - XTB

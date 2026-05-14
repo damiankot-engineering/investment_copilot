@@ -164,6 +164,7 @@ class Orchestrator:
         start: date | None = None,
         end: date | None = None,
         include_benchmark: bool = True,
+        benchmark: str | None = None,
     ) -> BacktestResult:
         """Run a backtest. Errors propagate — there's nothing to gracefully degrade."""
         return self._container.backtest_service.run(
@@ -172,6 +173,7 @@ class Orchestrator:
             start=start,
             end=end,
             include_benchmark=include_benchmark,
+            benchmark=benchmark,
         )
 
     # -- Pipeline 4: generate-report ---------------------------------------

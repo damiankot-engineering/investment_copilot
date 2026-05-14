@@ -60,6 +60,7 @@ class BacktestService:
         start: date | None = None,
         end: date | None = None,
         include_benchmark: bool = True,
+        benchmark: str | None = None,
     ) -> BacktestResult:
         """Run ``strategy_name`` on ``portfolio`` and return a typed result."""
         strategy = make_strategy(strategy_name, self._strat_cfg)
@@ -103,7 +104,9 @@ class BacktestService:
         bench_curve_points = []
         bench_metrics = None
         if include_benchmark:
-            bench_symbol, bench_equity = self._load_benchmark(start_date, end_date, initial_capital)
+            bench_symbol, bench_equity = self._load_benchmark(
+                start_date, end_date, initial_capital, benchmark_override=benchmark
+            )
             if bench_equity is not None and not bench_equity.empty:
                 bench_curve_points = equity_points(bench_equity)
                 bench_metrics = compute_metrics(
@@ -167,8 +170,10 @@ class BacktestService:
         start: date,
         end: date | None,
         initial_capital: float,
+        *,
+        benchmark_override: str | None = None,
     ) -> tuple[str | None, pd.Series | None]:
-        symbol = self._bt_cfg.benchmark
+        symbol = benchmark_override or self._bt_cfg.benchmark
         df = self._data.load_benchmark(symbol, start=start, end=end)
         if df is None or df.empty:
             return None, None
