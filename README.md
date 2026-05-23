@@ -14,7 +14,41 @@ Designed to be:
 
 - **Modular** — ports-and-adapters layout, every external dependency lives behind a `Protocol` and is swappable in one file.
 - **Polish-market-first** — Stooq for OHLCV (full GPW history, free API key required), RSS feeds (Bankier, Money.pl) for news, WIG20 as the default benchmark.
-- **API-ready** — every service takes Pydantic inputs and returns Pydantic outputs. The CLI is a thin adapter; a FastAPI app would be another.
+- **Three surfaces over one core** — CLI (Typer), Streamlit GUI, and a FastAPI + React web dashboard, all driving the same `ServiceContainer` + `Orchestrator`.
+
+![Investment Copilot — Web GUI](docs/web-gui-screenshot.png)
+<sub>_Web GUI — Portfolio tab. Regenerate with `python docs/_capture_screenshot.py` while uvicorn runs on port 8765._</sub>
+
+---
+
+## Quick Start
+
+Fastest path to a running web dashboard:
+
+```bash
+git clone <your-fork-url> investment-copilot && cd investment-copilot
+
+# 1. Install (core + web API extras)
+uv sync && uv pip install -e ".[api]"
+
+# 2. Generate config files (UTF-8 safe on Windows)
+uv run invcopilot init
+
+# 3. Add API keys to .env — both are free
+#    GROQ_API_KEY=...    (console.groq.com/keys)
+#    STOOQ_API_KEY=...   (stooq.pl/q/d/?s=pkn.pl&get_apikey)
+
+# 4. Edit portfolio.yaml with your real holdings
+
+# 5. Launch
+uv run uvicorn investment_copilot.api.main:app --port 8000
+# → http://localhost:8000   (dashboard)
+# → http://localhost:8000/docs   (OpenAPI)
+```
+
+In the dashboard: click **Odśwież dane rynkowe** (Portfolio tab) → wait ~20 s → everything else (Backtest / AI / Reports / Monitoring) is ready.
+
+For automation / cron, see [CLI usage](#cli-usage). For full setup details and other surfaces, see [Setup](#setup) and [Usage](#usage).
 
 ---
 
@@ -36,27 +70,41 @@ Designed to be:
 
 ### Layers
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  ENTRYPOINTS         CLI (Typer)   Streamlit GUI   FastAPI + UI │
-│                          │                        │             │
-│                          ▼                        ▼             │
-├─────────────────────────────────────────────────────────────────┤
-│  ORCHESTRATION       Orchestrator (pipelines: update→analyze→   │
-│                                    backtest→report)             │
-├─────────────────────────────────────────────────────────────────┤
-│  SERVICES            DataService  PortfolioService              │
-│                      BacktestService  CopilotService            │
-│                      ReportService                              │
-├─────────────────────────────────────────────────────────────────┤
-│  DOMAIN              Models (Pydantic)  Backtest engine         │
-│                      Strategies  Metrics  Prompt templates      │
-├─────────────────────────────────────────────────────────────────┤
-│  INFRASTRUCTURE      Providers (Stooq, RSS)                     │
-│                      LLM clients (Groq)                         │
-│                      Storage (SQLite + parquet)                 │
-│                      Config loader  Logger                      │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    classDef entry fill:#1e3a8a,stroke:#3b82f6,color:#fff
+    classDef orch  fill:#7c2d12,stroke:#ea580c,color:#fff
+    classDef svc   fill:#14532d,stroke:#22c55e,color:#fff
+    classDef dom   fill:#581c87,stroke:#a855f7,color:#fff
+    classDef infra fill:#1f2937,stroke:#9ca3af,color:#fff
+
+    CLI["CLI (Typer)"]:::entry
+    ST["Streamlit GUI"]:::entry
+    API["FastAPI + React UI"]:::entry
+
+    ORCH["Orchestrator<br/>pipelines: update · analyze · backtest · report · monitoring"]:::orch
+
+    DATA[DataService]:::svc
+    PORT[PortfolioService]:::svc
+    BACK[BacktestService]:::svc
+    COP[CopilotService]:::svc
+    MON[MonitoringService]:::svc
+    REP[ReportService]:::svc
+
+    DOM["Domain<br/>Pydantic models · backtest engine · strategies<br/>metrics · prompt templates"]:::dom
+
+    PROV["Providers<br/>Stooq · RSS · BiznesRadar"]:::infra
+    LLM["LLM clients<br/>Groq"]:::infra
+    STOR["Storage<br/>SQLite + parquet"]:::infra
+
+    CLI  --> ORCH
+    ST   --> ORCH
+    API  --> ORCH
+    ORCH --> DATA & PORT & BACK & COP & MON & REP
+    DATA & PORT & BACK & COP & MON & REP --> DOM
+    DATA & MON --> PROV
+    DATA --> STOR
+    COP & MON --> LLM
 ```
 
 Dependency rule: arrows point **downward only**. Domain knows nothing about infrastructure. Services depend on domain + infrastructure interfaces. Orchestration depends on services. Entrypoints depend on the orchestrator.
@@ -133,7 +181,7 @@ investment-copilot/
 │       ├── portfolio.jsx · backtest.jsx · analysis.jsx
 │       ├── reports.jsx · monitoring.jsx
 │       └── primitives.jsx · sidebar.jsx · icons.jsx · mockData.jsx
-└── tests/                            # 208 tests
+└── tests/                            # pytest suite
 ```
 
 ---
@@ -168,54 +216,6 @@ After install, the `invcopilot` command is available on `PATH`:
 uv run invcopilot version
 # investment-copilot 0.1.0
 ```
-
-### Web GUI (FastAPI + React, optional)
-
-A polished single-page web dashboard is available as an alternative to the Streamlit GUI. The backend is a thin FastAPI layer over the same orchestrator pipelines the CLI uses; the frontend is a CDN-served React app in `src/frontend/` (no build step). They run in one process on `http://localhost:8000`.
-
-```bash
-# install with the API extra
-uv pip install -e ".[api]"
-
-# run (opens http://localhost:8000 — frontend mounted at /, API at /api/*)
-uv run uvicorn investment_copilot.api.main:app --port 8000
-# OpenAPI docs at http://localhost:8000/docs
-```
-
-The web GUI exposes the same pipelines as the CLI:
-
-| Tab | Endpoint(s) it calls | Equivalent CLI |
-|---|---|---|
-| 📊 **Portfolio** | `GET/PUT /api/portfolio`, `GET /api/portfolio/status`, `POST /api/data/update` | `update-data` + status |
-| 📈 **Backtest** | `POST /api/backtest` | `backtest` |
-| ✨ **AI Analysis** | `POST /api/analysis` | `run-analysis` |
-| 📄 **Reports** | `GET/POST /api/reports`, `GET /api/reports/{name}` | `generate-report` |
-| 👁️ **Monitoring** | `POST /api/monitoring`, `GET /api/monitoring/reports` | _(web GUI only — no CLI command in v1)_ |
-
-Single-user, no auth, offline-friendly. Same `config.yaml`, `portfolio.yaml`, and `GROQ_API_KEY` env var as the CLI. Override paths via `COPILOT_CONFIG` and `COPILOT_PORTFOLIO`.
-
-### Streamlit GUI (optional)
-
-A local web GUI is available as an optional install. It's a thin layer over the same orchestrator pipelines the CLI uses — pure addition, zero changes to the rest of the codebase.
-
-```bash
-# install with the GUI extra
-uv pip install -e ".[gui]"
-
-# run (opens http://localhost:8501)
-uv run streamlit run streamlit_app.py
-```
-
-The GUI gives you four tabs over the standard pipelines:
-
-| Tab | What it does | Equivalent CLI command |
-|---|---|---|
-| 📊 **Portfolio** | Live PnL table, total metrics, **Update data** button | `update-data` + status |
-| 📈 **Backtest** | Strategy picker, equity curve + drawdown charts, metrics vs benchmark | `backtest` |
-| ✨ **AI Analysis** | Polish summary + risk alerts (with severity badges) from Groq | `run-analysis` |
-| 📄 **Reports** | Generate Markdown reports and browse/download existing ones | `generate-report` |
-
-Runs **fully offline** — it's just a local Python process. The same `config.yaml` and `portfolio.yaml` are used (configurable from the sidebar), and the same `GROQ_API_KEY` env var. State persists within a session, so navigating between tabs doesn't re-run pipelines.
 
 ### First-run configuration
 
@@ -261,7 +261,7 @@ If you do want to fix it manually:
 ### Run the tests
 
 ```bash
-uv run pytest -q                     # 208 tests, ~2 seconds
+uv run pytest -q                     # runs in seconds; all pure-Python, no network
 ```
 
 ---
@@ -380,6 +380,64 @@ holdings:
 ```
 
 Validation rules: positive shares and entry prices, no future entry dates, non-empty thesis, no duplicate tickers (after normalization), no unknown fields.
+
+---
+
+## Usage
+
+Three surfaces sit over the same `ServiceContainer` + `Orchestrator`. Pick the one that matches what you're doing:
+
+| Surface | Best for | Install | Launch |
+|---|---|---|---|
+| **Web GUI** (FastAPI + React) | Daily interactive review, editing the portfolio, charts | `uv pip install -e ".[api]"` | `uv run uvicorn investment_copilot.api.main:app --port 8000` |
+| **CLI** (Typer) | Cron jobs, scripted refresh, headless servers | _(core install)_ | `uv run invcopilot --help` |
+| **Streamlit GUI** | Legacy local poking, single-file alternative to the React UI | `uv pip install -e ".[gui]"` | `uv run streamlit run streamlit_app.py` |
+
+All three read the same `config.yaml`, `portfolio.yaml`, and `GROQ_API_KEY` / `STOOQ_API_KEY` env vars — there's no separate state.
+
+### Web GUI
+
+A polished single-page dashboard. Backend is a thin FastAPI layer over the orchestrator; frontend is a CDN-served React app in `src/frontend/` (no build step). Both run in one process.
+
+```bash
+uv pip install -e ".[api]"
+uv run uvicorn investment_copilot.api.main:app --port 8000
+# Dashboard:    http://localhost:8000
+# OpenAPI docs: http://localhost:8000/docs
+```
+
+Uvicorn binds **127.0.0.1** by default — single-user, no auth. Do not pass `--host 0.0.0.0` without putting auth in front. Add `--reload` during development to pick up Python changes automatically.
+
+| Tab | Endpoints | What it does |
+|---|---|---|
+| 📊 **Portfolio** | `GET/PUT /api/portfolio`, `/portfolio/status`, `POST /api/data/update` | Live PnL, holdings table, allocation donut, edit dialog, market-data refresh |
+| 📈 **Backtest** | `POST /api/backtest` | Strategy picker (3), benchmark dropdown, configurable date range, percent-return equity curve + drawdown, metrics |
+| ✨ **AI Analysis** | `POST /api/analysis` | Polish summary, thesis updates, severity-coded risk alerts |
+| 📄 **Reports** | `GET/POST /api/reports`, `/reports/{name}` | Generate, browse, preview, download Markdown reports |
+| 👁️ **Monitoring** | `POST /api/monitoring`, `/monitoring/reports` | LLM-driven thesis-monitoring snapshots, historical HTML reports (no CLI equivalent in v1) |
+
+State persists across tab switches — once you run a backtest or analysis, the result stays visible until you re-run it.
+
+For the full endpoint reference (request shapes, curl examples, design notes), jump to [Web API reference](#web-api-reference).
+
+### Streamlit GUI
+
+```bash
+uv pip install -e ".[gui]"
+uv run streamlit run streamlit_app.py        # http://localhost:8501
+```
+
+Four tabs (Portfolio / Backtest / AI Analysis / Reports) over the same orchestrator pipelines. Kept around for users who prefer one-file Python over a React app. The web GUI is the recommended surface going forward.
+
+### CLI
+
+Full command reference below in [CLI usage](#cli-usage). Quick taste:
+
+```bash
+uv run invcopilot update-data
+uv run invcopilot backtest -s buy_and_hold
+uv run invcopilot generate-report -o weekly.md
+```
 
 ---
 
@@ -553,6 +611,45 @@ The FastAPI app at `investment_copilot.api.main:app` exposes every orchestrator 
 | GET | `/api/monitoring/reports` | — | list of monitoring HTML files |
 | GET | `/api/monitoring/reports/{name}` | — | rendered HTML |
 
+### Environment variables
+
+The API resolves config and portfolio paths from these env vars at startup (no flags, since uvicorn doesn't forward them):
+
+| Variable | Default | Used by |
+|---|---|---|
+| `COPILOT_CONFIG` | `config.yaml` | API + CLI |
+| `COPILOT_PORTFOLIO` | _(value in `config.yaml`)_ | API + CLI |
+| `GROQ_API_KEY` | — (required for AI / monitoring) | LLM client |
+| `STOOQ_API_KEY` | — (required for OHLCV) | Stooq provider |
+
+```bash
+# Multi-portfolio: run two instances on different ports
+COPILOT_PORTFOLIO=portfolios/gpw.yaml   uv run uvicorn investment_copilot.api.main:app --port 8000
+COPILOT_PORTFOLIO=portfolios/usa.yaml   uv run uvicorn investment_copilot.api.main:app --port 8001
+```
+
+### Curl examples
+
+```bash
+# Smoke-test the backend
+curl -s http://localhost:8000/api/health | jq
+
+# Current portfolio with PnL
+curl -s http://localhost:8000/api/portfolio/status | jq '.holdings[] | {ticker: .display_ticker, pnl_pct}'
+
+# Refresh OHLCV + news (slow, 10–60 s)
+curl -s -X POST 'http://localhost:8000/api/data/update?news_days_back=30'
+
+# Run a backtest with a custom benchmark + window
+curl -s -X POST 'http://localhost:8000/api/backtest?strategy=buy_and_hold&benchmark=mwig40&start_date=2024-01-01' \
+  | jq '.metrics'
+
+# Generate a Markdown report and grab the filename
+curl -s -X POST http://localhost:8000/api/reports \
+  -H 'Content-Type: application/json' \
+  -d '{"strategy":"buy_and_hold","news_days_back":14}' | jq '.report.name'
+```
+
 ### Design notes
 
 - **Single wiring point.** Both the CLI and the API construct the same `ServiceContainer` via `build_container(load_config(...))`. The API caches it process-wide with `functools.lru_cache`.
@@ -568,6 +665,22 @@ The FastAPI app at `investment_copilot.api.main:app` exposes every orchestrator 
 - **No streaming progress.** `update-data` and `analysis` can take 5–60 s; the UI shows a spinner and waits for the full response. Add SSE / WebSockets if you want incremental feedback.
 - **No background scheduler.** `update-data` is on-demand. A deployment would add cron / APScheduler.
 - **No persistence of analysis history.** Each `/api/analysis` call hits Groq fresh. Reports and monitoring snapshots are persisted to disk; AI summaries inside them are not separately stored.
+
+---
+
+## Troubleshooting
+
+| Symptom | Cause / fix |
+|---|---|
+| `/api/analysis` returns **502 LLM error** | `GROQ_API_KEY` missing or invalid. Set it in `.env`, restart uvicorn. The CLI errors out the same way. |
+| Backtest returns **400 "No OHLCV data available"** | Cache is empty. Click **Odśwież dane rynkowe** in the Portfolio tab (or `invcopilot update-data`) first. |
+| Equity curve shows wild values like **+30000%** | Stale uvicorn — adapter changes haven't loaded. Restart the process, or launch with `--reload`. |
+| Monitoring snapshot crashes with **`ImportError: lxml`** | `pip install lxml` (or `uv pip install lxml`). BiznesRadar fundamentals use `pd.read_html`, which needs lxml. Now in core deps; older venvs may not have it. |
+| Web GUI loads but `/api/*` calls show **CORS errors** in console | You opened `index.html` directly (file://) instead of through uvicorn. Use `http://localhost:8000`, not `file:///.../index.html`. |
+| `.env decoded as UTF-16 LE` warning | Notepad saved your `.env` as "Unicode". The loader handles it, but to silence the warning re-save as UTF-8 (without BOM). VS Code status bar → "Save with Encoding" → UTF-8. |
+| `uv sync` fails with **"Process cannot access the file ... streamlit.exe"** | Streamlit is still running and holds the venv lock. Stop the Streamlit process (Ctrl+C), retry. |
+| All five tabs animate in on first load | Expected — every tab is mounted at startup so state persists across switches. Animations only run once per tab. |
+| Monitoring item shows ticker not found in BiznesRadar | Normal for ETFs and very new listings. The pipeline degrades gracefully — `warnings` list explains, LLM falls back to the thesis text + general news. |
 
 ---
 
