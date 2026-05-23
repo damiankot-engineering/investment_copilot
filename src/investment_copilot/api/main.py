@@ -307,6 +307,7 @@ def create_app() -> FastAPI:
     async def run_analysis(
         pf_path: Annotated[Path, Depends(get_portfolio_path)],
         orch: Annotated[Orchestrator, Depends(get_orchestrator)],
+        container: Annotated[ServiceContainer, Depends(get_container)],
         include_risks: bool = True,
         news_days_back: int = 14,
     ) -> AnalysisBundleDTO:
@@ -320,7 +321,18 @@ def create_app() -> FastAPI:
             )
         except LLMError as exc:
             raise HTTPException(status_code=502, detail=f"LLM error: {exc}")
-        return adapters.analysis_bundle_to_dto(bundle, portfolio=portfolio)
+
+        # Also surface the same quant metrics the LLM saw, so the UI can
+        # render them next to the citations the model produced.
+        metrics = await asyncio.to_thread(
+            _compute_metrics_for_status,
+            portfolio,
+            bundle.status,
+            container,
+        )
+        return adapters.analysis_bundle_to_dto(
+            bundle, portfolio=portfolio, metrics=metrics
+        )
 
     # ----------------------------------------------------------------- Reports
 
@@ -492,6 +504,44 @@ def create_app() -> FastAPI:
         logger.warning("Frontend directory not found at %s — API only.", _FRONTEND_DIR)
 
     return app
+
+
+def _compute_metrics_for_status(
+    portfolio: Portfolio,
+    status,  # PortfolioStatus
+    container: ServiceContainer,
+):
+    """Compute the same quant metrics the LLM saw, for the UI to render."""
+    from investment_copilot.domain.analysis_metrics import compute_portfolio_metrics
+
+    panel = {}
+    for h in portfolio.holdings:
+        df = container.data_service.load_ohlcv(h.ticker)
+        if df is not None and not df.empty:
+            panel[h.ticker] = df
+    if not panel:
+        return None
+
+    benchmark_close = None
+    benchmark_symbol = container.config.backtest.benchmark
+    try:
+        bdf = container.data_service.load_benchmark(benchmark_symbol)
+        if bdf is not None and not bdf.empty and "close" in bdf.columns:
+            benchmark_close = bdf["close"]
+    except Exception:  # noqa: BLE001
+        benchmark_close = None
+
+    try:
+        return compute_portfolio_metrics(
+            portfolio,
+            status,
+            ohlcv_panel=panel,
+            benchmark_close=benchmark_close,
+            benchmark_symbol=benchmark_symbol if benchmark_close is not None else None,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("compute metrics for UI failed: %s", exc)
+        return None
 
 
 app = create_app()

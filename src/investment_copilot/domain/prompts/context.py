@@ -16,6 +16,11 @@ from __future__ import annotations
 from datetime import date
 from typing import Iterable, Sequence
 
+from investment_copilot.domain.analysis_metrics import (
+    CitationRegistry,
+    PortfolioMetrics,
+    build_metric_keys,
+)
 from investment_copilot.domain.backtest import BacktestResult
 from investment_copilot.domain.fundamentals import (
     FundamentalsSnapshot,
@@ -158,38 +163,164 @@ def render_backtest(result: BacktestResult | None) -> str:
 # --- News -------------------------------------------------------------------
 
 
+def _pick_news_for_context(
+    news: Sequence[NewsItem],
+    *,
+    per_ticker_limit: int,
+    total_limit: int,
+) -> list[NewsItem]:
+    sorted_news = sorted(news, key=lambda n: n.published_at, reverse=True)
+    if not per_ticker_limit:
+        return sorted_news[:total_limit]
+    kept: list[NewsItem] = []
+    seen: dict[str | None, int] = {}
+    for n in sorted_news:
+        count = seen.get(n.ticker, 0)
+        if count >= per_ticker_limit:
+            continue
+        kept.append(n)
+        seen[n.ticker] = count + 1
+        if len(kept) >= total_limit:
+            break
+    return kept
+
+
 def render_news(
     news: Sequence[NewsItem],
     *,
     per_ticker_limit: int = MAX_NEWS_PER_TICKER,
     total_limit: int = MAX_NEWS_TOTAL,
 ) -> str:
-    if not news:
+    """Render recent news with stable `[news:N]` IDs the LLM can cite."""
+    picked = _pick_news_for_context(
+        news, per_ticker_limit=per_ticker_limit, total_limit=total_limit
+    )
+    if not picked:
         return "## Recent news\n_(brak ostatnich wiadomości w cache)_"
 
-    sorted_news = sorted(news, key=lambda n: n.published_at, reverse=True)
-    if per_ticker_limit:
-        kept: list[NewsItem] = []
-        seen: dict[str | None, int] = {}
-        for n in sorted_news:
-            key = n.ticker
-            count = seen.get(key, 0)
-            if count >= per_ticker_limit:
-                continue
-            kept.append(n)
-            seen[key] = count + 1
-            if len(kept) >= total_limit:
-                break
-        sorted_news = kept
-    else:
-        sorted_news = sorted_news[:total_limit]
-
-    lines = ["## Recent news"]
-    for n in sorted_news:
+    lines = [
+        "## Recent news",
+        "_Cytuj te pozycje jako `news:N` w polu `citations` (np. `news:3`)._",
+    ]
+    for idx, n in enumerate(picked, start=1):
         title = _one_liner(n.title, MAX_NEWS_TITLE_CHARS)
         when = n.published_at.strftime("%Y-%m-%d")
         ticker = f"[{n.ticker}] " if n.ticker else ""
-        lines.append(f"- {when} {ticker}{title}  ({n.source})")
+        lines.append(f"- **news:{idx}** {when} {ticker}{title}  ({n.source})")
+    return "\n".join(lines)
+
+
+def news_ids_for(
+    news: Sequence[NewsItem],
+    *,
+    per_ticker_limit: int = MAX_NEWS_PER_TICKER,
+    total_limit: int = MAX_NEWS_TOTAL,
+) -> set[str]:
+    """The set of valid `news:N` IDs given the same picking rules as `render_news`."""
+    picked = _pick_news_for_context(
+        news, per_ticker_limit=per_ticker_limit, total_limit=total_limit
+    )
+    return {f"news:{i}" for i in range(1, len(picked) + 1)}
+
+
+# --- Quantitative metrics block --------------------------------------------
+
+
+def _fmt_pct(v: float | None, *, signed: bool = False, decimals: int = 2) -> str:
+    if v is None:
+        return "—"
+    sign = "+" if signed and v > 0 else ""
+    return f"{sign}{v:.{decimals}f}%"
+
+
+def _fmt_num(v: float | None, *, decimals: int = 2) -> str:
+    if v is None:
+        return "—"
+    return f"{v:.{decimals}f}"
+
+
+def render_quant_metrics(metrics: PortfolioMetrics | None) -> str:
+    """Render the quantitative metrics block — the LLM should NEVER recompute these.
+
+    Includes a stable citation-key convention (e.g. ``metric:pkn.pl.ret_30d_pct``,
+    ``metric:portfolio.hhi``) so the model can ground claims in specific numbers.
+    """
+    if metrics is None:
+        return "## Quant metrics\n_(brak — wymaga danych OHLCV w cache)_"
+
+    bench = metrics.benchmark_symbol or "—"
+    hhi_label = (
+        "wysoka" if metrics.hhi is not None and metrics.hhi > 2500
+        else "umiarkowana" if metrics.hhi is not None and metrics.hhi > 1500
+        else "niska" if metrics.hhi is not None
+        else "—"
+    )
+    lines = [
+        "## Quant metrics — PRE-COMPUTED, cytuj wprost",
+        "_Cytuj te wartości jako `metric:KEY` w polu `citations` "
+        "(np. `metric:portfolio.hhi`, `metric:pkn.pl.ret_30d_pct`). "
+        "NIE rób własnych obliczeń — wszystkie liczby poniżej są autorytatywne._",
+        "",
+        "### Portfolio-level",
+        f"- **portfolio.hhi**: {_fmt_num(metrics.hhi, decimals=0)}  (koncentracja: {hhi_label})",
+        f"- **portfolio.top3_weight_pct**: {_fmt_pct(metrics.top3_weight_pct, decimals=1)}",
+        f"- **portfolio.largest_position_weight_pct**: "
+        f"{_fmt_pct(metrics.largest_position_weight_pct, decimals=1)} "
+        f"({metrics.largest_position_ticker or '—'})",
+        f"- Benchmark dla bety: **{bench}**",
+        "",
+        "### Per-holding",
+        "| Ticker | Waga % | Ret 30d | Ret 90d | Ret 252d | Od 52w high | Od 52w low | Vol ann. | Beta |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    for h in metrics.holdings:
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    h.ticker,
+                    _fmt_pct(h.weight_pct, decimals=1),
+                    _fmt_pct(h.ret_30d_pct, signed=True, decimals=1),
+                    _fmt_pct(h.ret_90d_pct, signed=True, decimals=1),
+                    _fmt_pct(h.ret_252d_pct, signed=True, decimals=1),
+                    _fmt_pct(h.distance_from_52w_high_pct, signed=True, decimals=1),
+                    _fmt_pct(h.distance_from_52w_low_pct, signed=True, decimals=1),
+                    _fmt_pct(h.ann_volatility_pct, decimals=1),
+                    _fmt_num(h.beta_vs_benchmark, decimals=2),
+                ]
+            )
+            + " |"
+        )
+
+    if metrics.top_correlations:
+        lines.append("")
+        lines.append("### Top correlations (daily log returns)")
+        for c in metrics.top_correlations:
+            a, b = sorted([c.ticker_a, c.ticker_b])
+            lines.append(
+                f"- **corr.{a}.{b}**: {c.correlation:+.2f}"
+            )
+    return "\n".join(lines)
+
+
+def render_history(reports: Sequence[tuple[str, str]]) -> str:
+    """Render previously generated Markdown reports as RAG context.
+
+    ``reports`` is an iterable of ``(label, body)`` pairs already truncated
+    to a reasonable length by the loader. The label is used as the
+    citation key (e.g. ``previous_report:weekly_2026-05-07``).
+    """
+    if not reports:
+        return ""
+    lines = [
+        "## Previous reports (RAG)",
+        "_Cytuj jako `previous_report:LABEL`. Uwzględnij zmiany sytuacji od "
+        "tych raportów. NIE kopiuj wniosków słowo w słowo._",
+    ]
+    for label, body in reports:
+        lines.append("")
+        lines.append(f"### previous_report:{label}")
+        lines.append(body.strip())
     return "\n".join(lines)
 
 
@@ -202,14 +333,47 @@ def build_portfolio_context(
     *,
     backtest: BacktestResult | None = None,
     news: Sequence[NewsItem] = (),
+    metrics: PortfolioMetrics | None = None,
+    history: Sequence[tuple[str, str]] = (),
 ) -> str:
-    return "\n\n".join(
-        [
-            render_holdings_table(portfolio),
-            render_status(status),
-            render_backtest(backtest),
-            render_news(news),
-        ]
+    pieces = [
+        render_holdings_table(portfolio),
+        render_status(status),
+        render_quant_metrics(metrics),
+        render_backtest(backtest),
+        render_news(news),
+    ]
+    history_block = render_history(history)
+    if history_block:
+        pieces.append(history_block)
+    return "\n\n".join(pieces)
+
+
+def build_citation_registry(
+    *,
+    news: Sequence[NewsItem] = (),
+    metrics: PortfolioMetrics | None = None,
+    fundamentals: Sequence[FundamentalsSnapshot] = (),
+    history: Sequence[tuple[str, str]] = (),
+) -> CitationRegistry:
+    """Build the set of valid citation targets matching the prompt context."""
+    news_ids = news_ids_for(news)
+    metric_keys = build_metric_keys(metrics) if metrics is not None else set()
+    fund_keys: set[str] = set()
+    for f in fundamentals:
+        for field in (
+            "last_price", "market_cap", "pe_ratio", "pbv_ratio", "eps",
+            "dividend_yield", "week52_high", "week52_low",
+            "revenue_yoy_pct", "ebitda_yoy_pct", "net_profit_yoy_pct",
+            "latest_quarter_label", "next_report_estimated_date",
+        ):
+            fund_keys.add(f"{f.ticker.lower()}.{field}")
+    report_keys = {f"previous_report:{label}" for label, _ in history}
+    return CitationRegistry(
+        news_ids=news_ids,
+        metric_keys=metric_keys,
+        fundamentals_keys=fund_keys,
+        report_keys=report_keys,
     )
 
 

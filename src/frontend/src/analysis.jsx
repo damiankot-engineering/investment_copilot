@@ -8,6 +8,47 @@ function SeverityIcon({ severity }) {
   return <Icon name="info" size={13} />;
 }
 
+function ConfidenceBadge({ value }) {
+  if (value == null) return null;
+  const tier =
+    value >= 8 ? { label: 'wysoka',    color: 'text-accent-green  bg-accent-green/10  border-accent-green/25'  } :
+    value >= 6 ? { label: 'średnia',   color: 'text-accent-amber  bg-accent-amber/10  border-accent-amber/25'  } :
+                 { label: 'niska',     color: 'text-accent-red    bg-accent-red/10    border-accent-red/25'    };
+  return (
+    <span
+      title={`Pewność modelu: ${value}/10`}
+      className={`inline-flex items-center gap-1.5 mono text-[10.5px] px-2 py-0.5 rounded border ${tier.color}`}
+    >
+      <Icon name="sparkles" size={10} />
+      <span>conf {value}/10 · {tier.label}</span>
+    </span>
+  );
+}
+
+function CitationChips({ citations }) {
+  if (!citations || citations.length === 0) return null;
+  const chipColor = {
+    news:            'text-accent-cyan   bg-accent-cyan/10   border-accent-cyan/25',
+    metric:          'text-accent-violet bg-accent-violet/10 border-accent-violet/25',
+    fundamentals:    'text-accent-green  bg-accent-green/10  border-accent-green/25',
+    previous_report: 'text-accent-amber  bg-accent-amber/10  border-accent-amber/25',
+  };
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 mt-2">
+      <span className="text-[10px] uppercase tracking-[0.14em] text-white/35 mr-1">Źródła:</span>
+      {citations.map((c, idx) => (
+        <span
+          key={idx}
+          title={`${c.source_type}: ${c.reference}`}
+          className={`mono text-[10.5px] px-1.5 py-0.5 rounded border ${chipColor[c.source_type] || 'text-white/55 bg-white/[0.04] border-white/[0.08]'}`}
+        >
+          {c.reference}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function RiskAlertCard({ alert, i }) {
   const variantBg = {
     high:   'border-accent-red/20    bg-accent-red/[0.04]',
@@ -44,6 +85,7 @@ function RiskAlertCard({ alert, i }) {
           </div>
           <div className="text-[13.5px] font-semibold text-white mt-2 tracking-tight">{alert.title}</div>
           <p className="text-[12.5px] text-white/65 mt-1 leading-relaxed">{alert.description}</p>
+          <CitationChips citations={alert.citations} />
         </div>
       </div>
     </AMot.div>
@@ -72,10 +114,138 @@ function ThesisUpdatesList({ items }) {
             <div className="mono text-[11.5px] font-semibold text-white bg-white/[0.04] border border-white/[0.06] rounded px-1.5 py-0.5 mt-0.5">
               {t.ticker}
             </div>
-            <p className="text-[12.5px] text-white/70 leading-relaxed flex-1">{t.assessment}</p>
+            <div className="flex-1 min-w-0">
+              <p className="text-[12.5px] text-white/70 leading-relaxed whitespace-pre-wrap">{t.assessment}</p>
+              <CitationChips citations={t.citations} />
+            </div>
           </AMot.div>
         ))}
       </div>
+    </Card>
+  );
+}
+
+function QuantMetricsSection({ metrics }) {
+  if (!metrics) return null;
+  const fmtPct1 = (v, signed = false) =>
+    v == null ? '—' : (signed && v > 0 ? '+' : '') + v.toFixed(1) + '%';
+  const fmtNum = (v, d = 2) => (v == null ? '—' : v.toFixed(d));
+
+  const hhi = metrics.hhi;
+  const hhiTier =
+    hhi == null ? { label: '—', color: 'text-white/50' } :
+    hhi > 2500   ? { label: 'wysoka',     color: 'text-accent-red'    } :
+    hhi > 1500   ? { label: 'umiarkowana', color: 'text-accent-amber'  } :
+                   { label: 'niska',      color: 'text-accent-green'  };
+
+  return (
+    <Card className="px-5 pt-4 pb-4">
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <div className="text-[10.5px] uppercase tracking-[0.16em] text-white/45">Metryki ilościowe</div>
+          <div className="text-[15px] font-medium tracking-tight text-white mt-0.5">Pre-computed dla LLM</div>
+        </div>
+        <Badge variant="default">{metrics.n_priced}/{metrics.n_holdings} z danymi</Badge>
+      </div>
+
+      {/* Portfolio-level summary tiles */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5 mb-4">
+        <div className="glass-soft rounded-lg px-3 py-2.5">
+          <div className="text-[10.5px] uppercase tracking-[0.14em] text-white/40">HHI</div>
+          <div className={`mt-1 text-[16px] font-semibold mono ${hhiTier.color}`}>
+            {hhi == null ? '—' : hhi.toFixed(0)}
+          </div>
+          <div className="text-[10.5px] text-white/40 mt-0.5">koncentracja {hhiTier.label}</div>
+        </div>
+        <div className="glass-soft rounded-lg px-3 py-2.5">
+          <div className="text-[10.5px] uppercase tracking-[0.14em] text-white/40">Top 3 waga</div>
+          <div className="mt-1 text-[16px] font-semibold mono text-white">{fmtPct1(metrics.top3_weight_pct)}</div>
+          <div className="text-[10.5px] text-white/40 mt-0.5">suma 3 największych</div>
+        </div>
+        <div className="glass-soft rounded-lg px-3 py-2.5">
+          <div className="text-[10.5px] uppercase tracking-[0.14em] text-white/40">Największa</div>
+          <div className="mt-1 text-[16px] font-semibold mono text-white">
+            {metrics.largest_position_display_ticker || '—'}
+          </div>
+          <div className="text-[10.5px] text-white/40 mt-0.5">
+            {fmtPct1(metrics.largest_position_weight_pct)} portfela
+          </div>
+        </div>
+        <div className="glass-soft rounded-lg px-3 py-2.5">
+          <div className="text-[10.5px] uppercase tracking-[0.14em] text-white/40">Benchmark (β)</div>
+          <div className="mt-1 text-[16px] font-semibold mono text-white">
+            {metrics.benchmark_symbol ? metrics.benchmark_symbol.toUpperCase() : '—'}
+          </div>
+          <div className="text-[10.5px] text-white/40 mt-0.5">do liczenia bety</div>
+        </div>
+      </div>
+
+      {/* Per-holding table */}
+      <div className="overflow-x-auto -mx-5 px-5">
+        <table className="w-full">
+          <thead>
+            <tr className="text-[10.5px] uppercase tracking-[0.14em] text-white/40 border-y border-white/[0.05]">
+              <th className="text-left  font-medium px-2 py-2">Ticker</th>
+              <th className="text-right font-medium px-2 py-2">Waga</th>
+              <th className="text-right font-medium px-2 py-2">Ret 30d</th>
+              <th className="text-right font-medium px-2 py-2">Ret 90d</th>
+              <th className="text-right font-medium px-2 py-2">Ret 252d</th>
+              <th className="text-right font-medium px-2 py-2">Od 52w high</th>
+              <th className="text-right font-medium px-2 py-2">Vol ann.</th>
+              <th className="text-right font-medium px-2 py-2">β</th>
+            </tr>
+          </thead>
+          <tbody>
+            {metrics.holdings.map((h) => {
+              const ret30Pos = (h.ret_30d_pct ?? 0) >= 0;
+              const ret252Pos = (h.ret_252d_pct ?? 0) >= 0;
+              return (
+                <tr key={h.ticker} className="border-b border-white/[0.03] last:border-0">
+                  <td className="px-2 py-2 mono text-[12px] text-white">{h.display_ticker}</td>
+                  <td className="px-2 py-2 text-right mono text-[12px] text-white/80">{fmtPct1(h.weight_pct)}</td>
+                  <td className={`px-2 py-2 text-right mono text-[12px] ${ret30Pos ? 'text-accent-green' : 'text-accent-red'}`}>
+                    {fmtPct1(h.ret_30d_pct, true)}
+                  </td>
+                  <td className="px-2 py-2 text-right mono text-[12px] text-white/70">{fmtPct1(h.ret_90d_pct, true)}</td>
+                  <td className={`px-2 py-2 text-right mono text-[12px] ${ret252Pos ? 'text-accent-green' : 'text-accent-red'}`}>
+                    {fmtPct1(h.ret_252d_pct, true)}
+                  </td>
+                  <td className="px-2 py-2 text-right mono text-[12px] text-accent-amber">
+                    {fmtPct1(h.distance_from_52w_high_pct, true)}
+                  </td>
+                  <td className="px-2 py-2 text-right mono text-[12px] text-white/70">{fmtPct1(h.ann_volatility_pct)}</td>
+                  <td className="px-2 py-2 text-right mono text-[12px] text-white/80">{fmtNum(h.beta_vs_benchmark, 2)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Correlations */}
+      {metrics.top_correlations?.length > 0 && (
+        <div className="mt-4">
+          <div className="text-[10.5px] uppercase tracking-[0.14em] text-white/40 mb-2">Top korelacje (dzienne log-returny)</div>
+          <div className="flex flex-wrap gap-2">
+            {metrics.top_correlations.map((c, i) => {
+              const strong = Math.abs(c.correlation) > 0.5;
+              return (
+                <span
+                  key={i}
+                  className={`mono text-[11.5px] px-2 py-1 rounded border ${
+                    strong
+                      ? 'text-accent-red bg-accent-red/10 border-accent-red/25'
+                      : 'text-white/70 bg-white/[0.04] border-white/[0.08]'
+                  }`}
+                  title={`corr.${c.ticker_a}.${c.ticker_b}`}
+                >
+                  {c.display_a}–{c.display_b}: {(c.correlation >= 0 ? '+' : '') + c.correlation.toFixed(2)}
+                </span>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </Card>
   );
 }
@@ -94,6 +264,7 @@ function AnalysisTab() {
         summary: bundle.analysis,           // { summary_md, thesis_updates, confidence } or null
         alerts: bundle.alerts || [],
         risk_overview: bundle.risk_overview,
+        metrics: bundle.metrics,            // PortfolioMetricsDTO or null
         warnings: bundle.warnings || [],
       });
       if (bundle.analysis) {
@@ -150,7 +321,10 @@ function AnalysisTab() {
               <div className="text-[10.5px] uppercase tracking-[0.16em] text-white/45">Podsumowanie portfela</div>
               <div className="text-[16px] font-semibold tracking-tight text-white mt-1">Synteza — maj 2026</div>
             </div>
-            <Badge variant="violet" icon="sparkles">claude · polski</Badge>
+            <div className="flex items-center gap-2">
+              {data?.summary?.confidence != null && <ConfidenceBadge value={data.summary.confidence} />}
+              <Badge variant="violet" icon="sparkles">claude · polski</Badge>
+            </div>
           </div>
           {loading || !data ? (
             <div className="flex flex-col gap-2">
@@ -184,6 +358,11 @@ function AnalysisTab() {
             <div className="text-[15px] font-medium tracking-tight text-white">Alerty ryzyka</div>
             <span className="text-[11.5px] text-white/45">{data ? data.alerts.length : 0} pozycji</span>
           </div>
+          {data?.risk_overview && (
+            <div className="glass-soft rounded-lg px-3.5 py-2.5 text-[12.5px] text-white/70 leading-relaxed border-l-2 border-accent-violet/40">
+              {data.risk_overview}
+            </div>
+          )}
           <div className="flex flex-col gap-2.5">
             {loading || !data ? (
               Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-[110px]" />)
@@ -197,6 +376,9 @@ function AnalysisTab() {
         </div>
       </div>
       )}
+
+      {/* Quant metrics — what the LLM was citing */}
+      {data && data.metrics && <QuantMetricsSection metrics={data.metrics} />}
 
       {/* Thesis updates */}
       {data && data.summary && <ThesisUpdatesList items={data.summary.thesis_updates} />}

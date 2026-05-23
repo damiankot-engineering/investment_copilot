@@ -6,17 +6,23 @@ from investment_copilot.api.schemas import (
     AnalysisBundleDTO,
     BacktestMetricsDTO,
     BacktestResultDTO,
+    CitationDTO,
+    CorrelationPairDTO,
     DrawdownPoint,
     EquityCurvePoint,
     HoldingDTO,
+    HoldingMetricsDTO,
     HoldingStatusDTO,
     MonitoringItemDTO,
     PortfolioAnalysisDTO,
     PortfolioDTO,
+    PortfolioMetricsDTO,
     PortfolioStatusDTO,
     RiskAlertDTO,
     ThesisUpdateDTO,
 )
+from investment_copilot.domain.analysis_metrics import PortfolioMetrics
+from investment_copilot.domain.prompts import Citation
 from investment_copilot.domain.backtest import BacktestResult, StrategyMetrics
 from investment_copilot.domain.portfolio import (
     Holding,
@@ -195,6 +201,13 @@ def backtest_to_dto(r: BacktestResult) -> BacktestResultDTO:
 _SEVERITY_PL_TO_EN = {"niskie": "low", "średnie": "medium", "wysokie": "high"}
 
 
+def _citations_to_dto(citations: list[Citation]) -> list[CitationDTO]:
+    return [
+        CitationDTO(source_type=c.source_type, reference=c.reference)
+        for c in citations
+    ]
+
+
 def portfolio_analysis_to_dto(a: PortfolioAnalysis) -> PortfolioAnalysisDTO:
     summary_md = a.summary
     if a.diversification_notes:
@@ -205,6 +218,7 @@ def portfolio_analysis_to_dto(a: PortfolioAnalysis) -> PortfolioAnalysisDTO:
         ThesisUpdateDTO(
             ticker=display_ticker(c.ticker),
             assessment=f"{c.comment}\n\nRekomendacja: **{c.recommendation}**",
+            citations=_citations_to_dto(c.citations),
         )
         for c in a.holdings_comments
     ]
@@ -223,16 +237,59 @@ def risk_alerts_to_dtos(r: RiskAlerts) -> tuple[str, list[RiskAlertDTO]]:
             description=a.description,
             ticker=display_ticker(a.ticker) if a.ticker else None,
             suggested_action=a.suggested_action,
+            citations=_citations_to_dto(a.citations),
         )
         for a in r.alerts
     ]
     return r.overview, alerts
 
 
+def portfolio_metrics_to_dto(m: PortfolioMetrics) -> PortfolioMetricsDTO:
+    return PortfolioMetricsDTO(
+        n_holdings=m.n_holdings,
+        n_priced=m.n_priced,
+        hhi=m.hhi,
+        top3_weight_pct=m.top3_weight_pct,
+        largest_position_ticker=m.largest_position_ticker,
+        largest_position_display_ticker=(
+            display_ticker(m.largest_position_ticker)
+            if m.largest_position_ticker else None
+        ),
+        largest_position_weight_pct=m.largest_position_weight_pct,
+        benchmark_symbol=m.benchmark_symbol,
+        holdings=[
+            HoldingMetricsDTO(
+                ticker=h.ticker,
+                display_ticker=display_ticker(h.ticker),
+                weight_pct=h.weight_pct,
+                ret_30d_pct=h.ret_30d_pct,
+                ret_90d_pct=h.ret_90d_pct,
+                ret_252d_pct=h.ret_252d_pct,
+                distance_from_52w_high_pct=h.distance_from_52w_high_pct,
+                distance_from_52w_low_pct=h.distance_from_52w_low_pct,
+                ann_volatility_pct=h.ann_volatility_pct,
+                beta_vs_benchmark=h.beta_vs_benchmark,
+            )
+            for h in m.holdings
+        ],
+        top_correlations=[
+            CorrelationPairDTO(
+                ticker_a=c.ticker_a,
+                ticker_b=c.ticker_b,
+                display_a=display_ticker(c.ticker_a),
+                display_b=display_ticker(c.ticker_b),
+                correlation=c.correlation,
+            )
+            for c in m.top_correlations
+        ],
+    )
+
+
 def analysis_bundle_to_dto(
     bundle: AnalysisBundle,
     *,
     portfolio: Portfolio | None = None,
+    metrics: PortfolioMetrics | None = None,
 ) -> AnalysisBundleDTO:
     overview: str | None = None
     alerts: list[RiskAlertDTO] = []
@@ -248,6 +305,7 @@ def analysis_bundle_to_dto(
         ),
         risk_overview=overview,
         alerts=alerts,
+        metrics=portfolio_metrics_to_dto(metrics) if metrics is not None else None,
         warnings=list(bundle.warnings),
         generated_at=bundle.generated_at,
     )

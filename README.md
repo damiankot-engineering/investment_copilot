@@ -19,6 +19,9 @@ Designed to be:
 ![Investment Copilot — Web GUI](docs/web-gui-screenshot.png)
 <sub>_Web GUI — Portfolio tab. Regenerate with `python docs/_capture_screenshot.py` while uvicorn runs on port 8765._</sub>
 
+![Investment Copilot — Analiza AI tab](docs/web-gui-analysis-screenshot.png)
+<sub>_Analiza AI — confidence badge, risk overview, grounded alerts with citation chips, and the same quant metrics block (HHI, returns, correlations) the LLM was citing. Regenerate with `python docs/_capture_analysis_screenshot.py`._</sub>
+
 ---
 
 ## Quick Start
@@ -59,6 +62,7 @@ For automation / cron, see [CLI usage](#cli-usage). For full setup details and o
 - **News aggregation** — multiple Polish RSS feeds plus best-effort scraping of Stooq's per-symbol news block. Persisted in SQLite, deduplicated by URL, queryable per ticker.
 - **Backtesting** — portfolio-level simulator with three strategies (MA-crossover, time-series momentum, buy & hold). Equal-weight across active sleeves, daily checks, end-of-day fills, no leverage, no shorts, zero costs (v1). Equity curve and a full metrics suite (total / annualized return, volatility, Sharpe @ 252, max drawdown with duration, win rate). Configurable benchmark (`wig20` / `mwig40` / `swig80` / `wig` / `wig30` / arbitrary Stooq ticker) buy-and-hold in the same window.
 - **Groq copilot** — three structured analyses with Polish output: portfolio summary, risk alerts, thesis update. JSON-mode + Pydantic validation, automatic self-correction on schema violations, exponential backoff on transient errors, fast-fail on auth errors.
+- **Grounded analysis** — quantitative metrics (HHI, top-3 concentration, per-holding 30/90/252d returns, distance from 52w high, annualized volatility, beta vs benchmark, top pairwise correlations) are computed in Python and injected into the prompt; the LLM cites specific `metric:KEY` / `news:N` / `fundamentals:TICKER.field` / `previous_report:LABEL` references; hallucinated citations are stripped Python-side before the result reaches the user. The last 2 Markdown reports are folded back in as RAG context so each run is framed as a delta over prior assessments.
 - **CLI** — Typer-based commands (`update-data`, `run-analysis`, `backtest`, `generate-report`) with Rich-rendered tables, severity-coloured risk panels, sensible exit codes, and graceful degradation when the LLM is unreachable.
 - **Markdown reports** — generated to `reports/`, fully Polish, with portfolio table, backtest metrics vs benchmark, AI sections, and warnings.
 - **Local persistence** — SQLite for news + metadata, parquet for OHLCV. Restart-safe, queryable, no ORM overhead.
@@ -121,15 +125,36 @@ CLI (Typer)
         │     ├─► simulate_portfolio()               → equity curve
         │     └─► compute_metrics()                  → Sharpe / DD / …
         ├─► CopilotService.analyze_portfolio()       → PortfolioAnalysis
-        │     ├─► load news from SQLite
+        │     ├─► load news from SQLite              → indexed as news:1..N
+        │     ├─► compute_portfolio_metrics()        → HHI, returns, beta, corr
+        │     ├─► load_recent_reports()              → RAG context (last 2 .md)
         │     ├─► build_portfolio_context()          → Markdown blocks
-        │     ├─► render Polish prompt template
-        │     └─► GroqClient.complete_structured()   → Pydantic
-        ├─► CopilotService.detect_risks()            → RiskAlerts
+        │     ├─► render Polish prompt template      → citation rules + examples
+        │     ├─► GroqClient.complete_structured()   → Pydantic + citations
+        │     └─► _validate_*_citations()            → drop unknown refs
+        ├─► CopilotService.detect_risks()            → RiskAlerts (grounded)
         └─► ReportService.write()                    → reports/*.md
 ```
 
 Every arrow is a typed call. Every box is independently testable. The orchestrator captures non-fatal errors (LLM timeouts, missing benchmark data, etc.) into a `warnings` list rather than aborting the run — so a partial result is always available.
+
+### Grounded analysis
+
+The LLM is treated as an **interpreter**, never a calculator. Three layers of grounding sit between raw data and the model:
+
+1. **Quant metrics block.** Before each call, `compute_portfolio_metrics()` produces a Pydantic `PortfolioMetrics` from the OHLCV cache + benchmark series:
+   - Portfolio-level: HHI (Herfindahl-Hirschman), top-3 weight, largest position
+   - Per-holding: weight, returns 30d/90d/252d, distance from 52w high/low, annualized volatility, beta vs benchmark
+   - Cross-holding: up to 5 strongest pairwise correlations of daily log returns
+   These render as a `## Quant metrics` Markdown block with stable citation keys (`metric:portfolio.hhi`, `metric:pkn.pl.ret_30d_pct`, `metric:corr.pkn.pl.pko.pl`).
+
+2. **Indexed news.** `render_news()` prefixes each headline with `news:N`. The LLM cites specific items rather than paraphrasing.
+
+3. **RAG over reports.** `load_recent_reports()` reads the last 2 Markdown reports from `reports/*.md`, extracts the substantive sections (summary / risks / theses), and feeds them as `previous_report:LABEL` so the new run is framed as a delta.
+
+The output schemas (`HoldingComment`, `RiskAlert`) require a `citations: list[Citation]` field; the system prompt mandates ≥1 citation per claim. After the LLM returns, `_validate_*_citations()` checks every reference against a `CitationRegistry` built from the same sources fed into the prompt — **unknown references are dropped, hallucinations are logged**. Lenient by design: the model is encouraged to over-cite rather than fabricate, and we strip the bad ones rather than failing the whole run.
+
+The Web GUI surfaces all of this so the user can spot-check: the **Analiza AI** tab renders a `Metryki ilościowe` card with HHI / top-3 / per-holding returns / top correlations next to the LLM output, plus colored citation chips under each risk alert and thesis update. Confidence (1-10) and the risk overview text are visible in the header. See the [analysis screenshot](docs/web-gui-analysis-screenshot.png).
 
 ### Project layout
 
@@ -150,9 +175,10 @@ investment-copilot/
 │   │   ├── models.py                 # core types (Ticker, NewsItem, ...)
 │   │   ├── portfolio.py              # Holding, Portfolio, status models
 │   │   ├── fundamentals.py           # fundamentals + monitoring snapshots
+│   │   ├── analysis_metrics.py       # HHI, beta, returns, correlations, CitationRegistry
 │   │   ├── strategies/               # MACrossover, Momentum, BuyAndHold
 │   │   ├── backtest/                 # engine, metrics, results
-│   │   └── prompts/                  # context builder, schemas, templates
+│   │   └── prompts/                  # context builder, schemas, templates (+ Citation)
 │   ├── infrastructure/
 │   │   ├── providers/                # Stooq, RSS, BiznesRadar, factory
 │   │   ├── llm/                      # GroqClient, factory, errors
@@ -162,7 +188,8 @@ investment-copilot/
 │   │   ├── data_service.py
 │   │   ├── portfolio_service.py
 │   │   ├── backtest_service.py
-│   │   ├── copilot_service.py
+│   │   ├── copilot_service.py        # LLM analyses + citation validation
+│   │   ├── analysis_history.py       # RAG loader over reports/*.md
 │   │   ├── monitoring_service.py
 │   │   ├── report_service.py
 │   │   ├── container.py              # ServiceContainer factory
@@ -681,6 +708,7 @@ curl -s -X POST http://localhost:8000/api/reports \
 | `uv sync` fails with **"Process cannot access the file ... streamlit.exe"** | Streamlit is still running and holds the venv lock. Stop the Streamlit process (Ctrl+C), retry. |
 | All five tabs animate in on first load | Expected — every tab is mounted at startup so state persists across switches. Animations only run once per tab. |
 | Monitoring item shows ticker not found in BiznesRadar | Normal for ETFs and very new listings. The pipeline degrades gracefully — `warnings` list explains, LLM falls back to the thesis text + general news. |
+| Log shows `Dropped N unknown citations from portfolio analysis` | Expected and benign — the citation-grounding validator caught the LLM inventing references. The valid ones stay; the bogus ones are stripped. If the rate is high (>50% of citations dropped), the prompt may need tuning. |
 
 ---
 

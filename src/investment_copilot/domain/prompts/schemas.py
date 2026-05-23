@@ -18,6 +18,46 @@ from pydantic import BaseModel, ConfigDict, Field
 # --- Reusable parts ---------------------------------------------------------
 
 
+CitationSourceType = Literal["news", "metric", "fundamentals", "previous_report"]
+
+
+class Citation(BaseModel):
+    """A grounding citation — must reference something present in the prompt.
+
+    Citations are verified Python-side after LLM completion; unknown
+    references are dropped (lenient mode) so the model is encouraged
+    to over-cite rather than fabricate.
+
+    Examples
+    --------
+    ``Citation(source_type="news", reference="news:3")``
+    ``Citation(source_type="metric", reference="metric:pkn.pl.ret_30d_pct")``
+    ``Citation(source_type="fundamentals", reference="fundamentals:cdr.pl.revenue_yoy_pct")``
+    ``Citation(source_type="previous_report", reference="previous_report:weekly_2026-05-07")``
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_type: CitationSourceType = Field(
+        description=(
+            "Rodzaj źródła: 'news' (id z sekcji Recent news), 'metric' "
+            "(klucz z sekcji Quant metrics), 'fundamentals' (pole z sekcji "
+            "Fundamentals), 'previous_report' (id z sekcji Previous reports)."
+        ),
+    )
+    reference: str = Field(
+        min_length=1, max_length=200,
+        description=(
+            "Identyfikator źródła BEZ duplikowania source_type. "
+            "Dla source_type='news': 'news:3'. "
+            "Dla source_type='metric': 'portfolio.hhi' albo 'pkn.pl.ret_30d_pct' "
+            "(SAM klucz, bez prefiksu 'metric:'). "
+            "Dla source_type='fundamentals': 'cdr.pl.revenue_yoy_pct'. "
+            "Dla source_type='previous_report': 'previous_report:weekly_2026-05-07'."
+        ),
+    )
+
+
 SeverityLevel = Literal["niskie", "średnie", "wysokie"]
 RecommendationAction = Literal["trzymaj", "zwiększ", "zmniejsz", "obserwuj", "zamknij"]
 ThesisStatus = Literal[
@@ -51,6 +91,14 @@ class HoldingComment(BaseModel):
         description=(
             "Rekomendacja działania: 'trzymaj', 'zwiększ', 'zmniejsz', "
             "'obserwuj' (bez zmian, ale wymaga uwagi), 'zamknij'."
+        ),
+    )
+    citations: list[Citation] = Field(
+        default_factory=list,
+        description=(
+            "Lista źródeł wspierających komentarz — przynajmniej 1 pozycja "
+            "z sekcji Quant metrics LUB Recent news. Wartości nieobecne w "
+            "kontekście są odrzucane przy walidacji."
         ),
     )
 
@@ -120,6 +168,13 @@ class RiskAlert(BaseModel):
         min_length=1,
         max_length=300,
         description="Konkretna sugestia działania monitorującego lub mitygującego.",
+    )
+    citations: list[Citation] = Field(
+        default_factory=list,
+        description=(
+            "Lista źródeł uzasadniających istnienie tego ryzyka — co najmniej "
+            "1 cytowanie z Quant metrics, Recent news lub Fundamentals."
+        ),
     )
 
 

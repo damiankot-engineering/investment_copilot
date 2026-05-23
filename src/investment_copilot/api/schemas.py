@@ -127,9 +127,17 @@ class BacktestResultDTO(BaseModel):
 # --- AI analysis ------------------------------------------------------------
 
 
+class CitationDTO(BaseModel):
+    """Grounding reference attached to a claim in the LLM output."""
+
+    source_type: Literal["news", "metric", "fundamentals", "previous_report"]
+    reference: str
+
+
 class ThesisUpdateDTO(BaseModel):
     ticker: str
     assessment: str
+    citations: list[CitationDTO] = Field(default_factory=list)
 
 
 class PortfolioAnalysisDTO(BaseModel):
@@ -151,6 +159,45 @@ class RiskAlertDTO(BaseModel):
     description: str
     ticker: str | None = None
     suggested_action: str | None = None
+    citations: list[CitationDTO] = Field(default_factory=list)
+
+
+class HoldingMetricsDTO(BaseModel):
+    """Per-holding quantitative metrics (mirrors PortfolioMetrics.holdings)."""
+
+    ticker: str
+    display_ticker: str
+    weight_pct: float | None = None
+    ret_30d_pct: float | None = None
+    ret_90d_pct: float | None = None
+    ret_252d_pct: float | None = None
+    distance_from_52w_high_pct: float | None = None
+    distance_from_52w_low_pct: float | None = None
+    ann_volatility_pct: float | None = None
+    beta_vs_benchmark: float | None = None
+
+
+class CorrelationPairDTO(BaseModel):
+    ticker_a: str
+    ticker_b: str
+    display_a: str
+    display_b: str
+    correlation: float
+
+
+class PortfolioMetricsDTO(BaseModel):
+    """Quant metrics for the analysis tab — what the LLM was citing."""
+
+    n_holdings: int
+    n_priced: int
+    hhi: float | None = None
+    top3_weight_pct: float | None = None
+    largest_position_ticker: str | None = None
+    largest_position_display_ticker: str | None = None
+    largest_position_weight_pct: float | None = None
+    benchmark_symbol: str | None = None
+    holdings: list[HoldingMetricsDTO] = Field(default_factory=list)
+    top_correlations: list[CorrelationPairDTO] = Field(default_factory=list)
 
 
 class AnalysisBundleDTO(BaseModel):
@@ -158,6 +205,7 @@ class AnalysisBundleDTO(BaseModel):
     analysis: PortfolioAnalysisDTO | None = None
     risk_overview: str | None = None
     alerts: list[RiskAlertDTO] = Field(default_factory=list)
+    metrics: PortfolioMetricsDTO | None = None
     warnings: list[str] = Field(default_factory=list)
     generated_at: datetime
 

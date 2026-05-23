@@ -43,7 +43,17 @@ _BASE_SYSTEM: Final[str] = (
 PORTFOLIO_SYSTEM: Final[str] = (
     f"{_BASE_SYSTEM}\n\n"
     "W tej rozmowie analizujesz cały portfel: bieżący stan PnL, każdą "
-    "pozycję względem jej tezy, dywersyfikację, oraz ostatnie wiadomości."
+    "pozycję względem jej tezy, dywersyfikację, oraz ostatnie wiadomości.\n\n"
+    "ŹRÓDŁA PRAWDY (cytuj WPROST, nie wymyślaj liczb):\n"
+    "1. Sekcja 'Quant metrics' — wszystkie liczby ilościowe (HHI, wagi, "
+    "returny 30/90/252d, dystans od 52w high, vol, beta, korelacje) są "
+    "PRE-COMPUTED. Cytuj je przez `metric:KEY` (np. `metric:pkn.pl.ret_30d_pct`).\n"
+    "2. Sekcja 'Recent news' — pozycje mają stabilne ID `news:N`. Cytuj "
+    "konkretne ID, nie parafrazuj.\n"
+    "3. Sekcja 'Previous reports' (jeśli obecna) — cytuj jako "
+    "`previous_report:LABEL`. Wskazuj zmiany od poprzedniej oceny.\n\n"
+    "KAŻDY `holdings_comments` MUSI mieć min. 1 cytowanie. Komentarz bez "
+    "cytowania = halucynacja. Lepiej mniej zdań ale ugruntowanych."
 )
 
 PORTFOLIO_USER_TEMPLATE: Final[str] = (
@@ -51,10 +61,15 @@ PORTFOLIO_USER_TEMPLATE: Final[str] = (
     "przygotuj analizę zgodnie z wymaganym schematem JSON.\n\n"
     "{context}\n\n"
     "Wygeneruj jeden obiekt JSON z polami:\n"
-    " - 'summary': zwięzłe podsumowanie po polsku.\n"
-    " - 'holdings_comments': komentarz do każdej pozycji.\n"
-    " - 'diversification_notes': ocena dywersyfikacji.\n"
-    " - 'confidence': pewność (1-10).\n"
+    " - 'summary': zwięzłe podsumowanie po polsku (3-6 zdań).\n"
+    " - 'holdings_comments': komentarz do KAŻDEJ pozycji, KAŻDY z >=1 "
+    "elementem 'citations' wskazującym konkretne `news:N` lub "
+    "`metric:TICKER.field`.\n"
+    " - 'diversification_notes': ocena dywersyfikacji, oparta na "
+    "`metric:portfolio.hhi`, `metric:portfolio.top3_weight_pct` i "
+    "korelacjach `corr.A.B`.\n"
+    " - 'confidence': pewność (1-10). 8-10 gdy są metryki + news, 4-6 gdy "
+    "brak świeżych danych.\n"
 )
 
 
@@ -63,9 +78,13 @@ PORTFOLIO_USER_TEMPLATE: Final[str] = (
 RISK_SYSTEM: Final[str] = (
     f"{_BASE_SYSTEM}\n\n"
     "W tej rozmowie identyfikujesz ryzyka portfelowe. Skup się na "
-    "rzeczywistych sygnałach z danych (wyniki backtestu, drawdown, "
-    "wiadomości), a nie na ogólnych prawdach inwestycyjnych. Lepiej "
-    "zwrócić mniej, ale konkretnych ryzyk niż rozbudowaną listę banalnych."
+    "rzeczywistych sygnałach z danych (metryki ilościowe, wyniki "
+    "backtestu, drawdown, wiadomości), a nie na ogólnych prawdach "
+    "inwestycyjnych. Lepiej zwrócić mniej, ale konkretnych ryzyk niż "
+    "rozbudowaną listę banalnych.\n\n"
+    "KAŻDY alert MUSI mieć min. 1 cytowanie wskazujące konkretne źródło "
+    "(`metric:KEY`, `news:N`, `fundamentals:TICKER.field` lub "
+    "`previous_report:LABEL`). Ryzyko bez cytowania = halucynacja."
 )
 
 RISK_USER_TEMPLATE: Final[str] = (
@@ -75,8 +94,16 @@ RISK_USER_TEMPLATE: Final[str] = (
     "{context}\n\n"
     "Wygeneruj jeden obiekt JSON z polami:\n"
     " - 'overview': krótkie wprowadzenie kontekstu ryzyka.\n"
-    " - 'alerts': lista ryzyk z polami 'ticker' (lub null), 'severity', "
-    "'title', 'description', 'suggested_action'.\n"
+    " - 'alerts': lista ryzyk; KAŻDY z polami 'ticker' (lub null), "
+    "'severity', 'title', 'description', 'suggested_action' ORAZ "
+    "'citations' (>= 1 element wskazujący konkretne źródło z kontekstu).\n"
+    "\n"
+    "PRZYKŁADY ryzyk dobrze ugruntowanych:\n"
+    "- 'Wysoka koncentracja' → cytowanie `metric:portfolio.hhi` + "
+    "`metric:portfolio.top3_weight_pct`.\n"
+    "- 'Korelacja pozycji A i B' → cytowanie `metric:corr.A.B`.\n"
+    "- 'Spadek od 52w high' → cytowanie `metric:TICKER.distance_from_52w_high_pct`.\n"
+    "- 'Negatywny news' → cytowanie konkretnego `news:N`.\n"
 )
 
 
