@@ -33,12 +33,14 @@ from investment_copilot.api.deps import (
     get_orchestrator,
     get_portfolio_path,
     get_reports_dir,
+    get_watchlist_path,
 )
 from investment_copilot.api.schemas import (
     AnalysisBundleDTO,
     AppConfigDTO,
     BacktestResultDTO,
     BenchmarkInfoDTO,
+    CalendarBundleDTO,
     DataUpdateResult,
     GenerateReportRequest,
     GenerateReportResponse,
@@ -50,18 +52,24 @@ from investment_copilot.api.schemas import (
     ReportFileDTO,
     RunMonitoringRequest,
     StrategyInfoDTO,
+    WatchlistDTO,
+    WatchlistStatusDTO,
 )
 from investment_copilot.domain.models import BENCHMARK_SYMBOLS, resolve_benchmark
 from investment_copilot.domain.portfolio import Portfolio
 from investment_copilot.domain.strategies import KNOWN_STRATEGIES
+from investment_copilot.domain.watchlist import Watchlist
 from investment_copilot.infrastructure.llm import LLMError
 from investment_copilot.infrastructure.logging import configure_logging
 from investment_copilot.orchestrator import Orchestrator
 from investment_copilot.services import (
     PortfolioError,
     ServiceContainer,
+    WatchlistError,
     load_portfolio,
+    load_watchlist,
     save_portfolio,
+    save_watchlist,
 )
 
 logger = logging.getLogger(__name__)
@@ -234,6 +242,79 @@ def create_app() -> FastAPI:
         )
         return adapters.portfolio_status_to_dto(status_obj, portfolio=portfolio)
 
+    # ------------------------------------------------------------- Watchlist
+
+    @app.get(
+        "/api/watchlist",
+        response_model=WatchlistDTO,
+        tags=["watchlist"],
+    )
+    async def get_watchlist(
+        wl_path: Annotated[Path, Depends(get_watchlist_path)],
+    ) -> WatchlistDTO:
+        try:
+            wl = await asyncio.to_thread(load_watchlist, str(wl_path))
+        except WatchlistError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return adapters.watchlist_to_dto(wl)
+
+    @app.put(
+        "/api/watchlist",
+        response_model=WatchlistDTO,
+        tags=["watchlist"],
+    )
+    async def put_watchlist(
+        payload: WatchlistDTO,
+        wl_path: Annotated[Path, Depends(get_watchlist_path)],
+    ) -> WatchlistDTO:
+        raw = payload.model_dump(mode="json")
+        for it in raw.get("items", []):
+            it.pop("display_ticker", None)
+        try:
+            domain_wl = Watchlist.model_validate(raw)
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        try:
+            await asyncio.to_thread(save_watchlist, domain_wl, str(wl_path))
+        except WatchlistError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return adapters.watchlist_to_dto(domain_wl)
+
+    @app.get(
+        "/api/watchlist/status",
+        response_model=WatchlistStatusDTO,
+        tags=["watchlist"],
+    )
+    async def watchlist_status(
+        wl_path: Annotated[Path, Depends(get_watchlist_path)],
+        container: Annotated[ServiceContainer, Depends(get_container)],
+    ) -> WatchlistStatusDTO:
+        wl = await asyncio.to_thread(load_watchlist, str(wl_path))
+        status_obj = await asyncio.to_thread(
+            container.watchlist_service.current_status, wl
+        )
+        return adapters.watchlist_status_to_dto(status_obj)
+
+    # -------------------------------------------------------------- Calendar
+
+    @app.get(
+        "/api/calendar",
+        response_model=CalendarBundleDTO,
+        tags=["calendar"],
+    )
+    async def get_calendar(
+        pf_path: Annotated[Path, Depends(get_portfolio_path)],
+        container: Annotated[ServiceContainer, Depends(get_container)],
+    ) -> CalendarBundleDTO:
+        portfolio = await asyncio.to_thread(load_portfolio, str(pf_path))
+        status = await asyncio.to_thread(
+            container.portfolio_service.current_status, portfolio
+        )
+        bundle = await asyncio.to_thread(
+            container.calendar_service.build, portfolio, status
+        )
+        return adapters.calendar_bundle_to_dto(bundle)
+
     # ------------------------------------------------------------------ Data
 
     @app.post(
@@ -243,12 +324,21 @@ def create_app() -> FastAPI:
     )
     async def update_data(
         pf_path: Annotated[Path, Depends(get_portfolio_path)],
+        wl_path: Annotated[Path, Depends(get_watchlist_path)],
         orch: Annotated[Orchestrator, Depends(get_orchestrator)],
         news_days_back: int = 14,
     ) -> DataUpdateResult:
         portfolio = await asyncio.to_thread(load_portfolio, str(pf_path))
+        # Watchlist is optional — load returns empty Watchlist if file missing.
+        try:
+            watchlist = await asyncio.to_thread(load_watchlist, str(wl_path))
+        except WatchlistError:
+            watchlist = None
         report = await asyncio.to_thread(
-            orch.update_data, portfolio, news_days_back=news_days_back
+            orch.update_data,
+            portfolio,
+            news_days_back=news_days_back,
+            watchlist=watchlist,
         )
         return DataUpdateResult(
             ohlcv_updated=dict(report.ohlcv_updated),
@@ -494,10 +584,21 @@ def create_app() -> FastAPI:
 
     if _FRONTEND_DIR.is_dir():
         # Serve the in-repo CDN-React frontend at the root. `html=True`
-        # makes `/` resolve to `index.html` automatically.
+        # makes `/` resolve to `index.html` automatically. Cache-Control
+        # is forced to "no-cache" because the JSX files are Babel-transpiled
+        # in the browser and bumping versions per change would be painful —
+        # this guarantees `uv run uvicorn ...` always serves fresh files.
+        class _NoCacheStaticFiles(StaticFiles):
+            async def get_response(self, path, scope):
+                resp = await super().get_response(path, scope)
+                resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+                resp.headers["Pragma"] = "no-cache"
+                resp.headers["Expires"] = "0"
+                return resp
+
         app.mount(
             "/",
-            StaticFiles(directory=str(_FRONTEND_DIR), html=True),
+            _NoCacheStaticFiles(directory=str(_FRONTEND_DIR), html=True),
             name="frontend",
         )
     else:  # pragma: no cover

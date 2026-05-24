@@ -268,6 +268,66 @@ class RunMonitoringRequest(BaseModel):
 # --- Misc -------------------------------------------------------------------
 
 
+# --- Watchlist --------------------------------------------------------------
+
+
+class WatchlistItemDTO(BaseModel):
+    """A watchlist entry as the frontend sees it."""
+
+    ticker: str
+    display_ticker: str
+    name: str | None = None
+    added_date: date
+    target_buy_price: float | None = None
+    notes: str = ""
+    keywords: list[str] = Field(default_factory=list)
+
+
+class WatchlistDTO(BaseModel):
+    items: list[WatchlistItemDTO]
+
+
+class WatchlistItemStatusDTO(WatchlistItemDTO):
+    """A watchlist item enriched with the latest cached price + alert flag."""
+
+    last_price: float | None = None
+    last_price_date: date | None = None
+    distance_to_target_pct: float | None = None
+    alert: bool = False
+    news_count_30d: int = 0
+
+
+class WatchlistStatusDTO(BaseModel):
+    as_of: datetime
+    items: list[WatchlistItemStatusDTO]
+    missing_data: list[str] = Field(default_factory=list)
+
+
+# --- Calendar ---------------------------------------------------------------
+
+
+class CalendarEventDTO(BaseModel):
+    ticker: str
+    display_ticker: str
+    name: str | None = None
+    kind: Literal["report", "dividend", "agm", "espi", "dividend_record", "dividend_payment"]
+    event_date: date | None = None
+    label: str
+    description: str = ""
+    importance: Literal["high", "medium", "low"] = "medium"
+    amount_pln: float | None = None
+    days_until: int | None = Field(
+        default=None,
+        description="Positive when in the future; null when no date.",
+    )
+
+
+class CalendarBundleDTO(BaseModel):
+    events: list[CalendarEventDTO]
+    snapshot_age_days: int | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
 class HealthDTO(BaseModel):
     status: Literal["ok"] = "ok"
     version: str

@@ -17,6 +17,13 @@ from investment_copilot.services.portfolio_service import (
     save_portfolio,
 )
 from investment_copilot.services.report_service import ReportService
+from investment_copilot.services.watchlist_service import (
+    WatchlistError,
+    WatchlistService,
+    WatchlistStatus,
+    load_watchlist,
+    save_watchlist,
+)
 
 __all__ = [
     "AnalysisBundle",
@@ -31,7 +38,12 @@ __all__ = [
     "RefreshReport",
     "ReportService",
     "ServiceContainer",
+    "WatchlistError",
+    "WatchlistService",
+    "WatchlistStatus",
     "build_container",
     "load_portfolio",
+    "load_watchlist",
     "save_portfolio",
+    "save_watchlist",
 ]

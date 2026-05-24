@@ -26,6 +26,7 @@ from pathlib import Path
 
 from investment_copilot.domain.backtest import BacktestError, BacktestResult
 from investment_copilot.domain.portfolio import Portfolio
+from investment_copilot.domain.watchlist import Watchlist
 from investment_copilot.infrastructure.llm import LLMError
 from investment_copilot.services.data_service import RefreshReport
 from investment_copilot.services.pipeline_results import (
@@ -61,22 +62,35 @@ class Orchestrator:
         start: date | None = None,
         end: date | None = None,
         news_days_back: int = 14,
+        watchlist: Watchlist | None = None,
     ) -> RefreshReport:
-        """Refresh OHLCV (per holding + benchmark) and news caches."""
+        """Refresh OHLCV (per holding + benchmark + watchlist) and news caches.
+
+        If ``watchlist`` is provided, its tickers are added to the OHLCV
+        refresh and its keywords merged into the per-ticker news map, so the
+        Watchlist tab can show live prices and news cards just like Portfolio.
+        Portfolio keywords win on duplicate tickers.
+        """
         cfg = self._container.config
         data = self._container.data_service
         start_date = start or cfg.backtest.start_date
         report = RefreshReport()
 
+        all_tickers = list(portfolio.tickers)
+        if watchlist is not None:
+            for t in watchlist.tickers:
+                if t not in all_tickers:
+                    all_tickers.append(t)
+
         # OHLCV per ticker (DataService.refresh_ohlcv handles per-ticker errors)
         try:
             updated = data.refresh_ohlcv(
-                portfolio.tickers, start=start_date, end=end
+                all_tickers, start=start_date, end=end
             )
             report.ohlcv_updated.update(updated)
         except Exception as exc:  # provider-level catastrophic failure
             logger.exception("update_data: OHLCV refresh aborted")
-            for t in portfolio.tickers:
+            for t in all_tickers:
                 report.ohlcv_failed.setdefault(t, str(exc))
 
         # Benchmark
@@ -90,7 +104,7 @@ class Orchestrator:
             logger.warning("update_data: benchmark refresh failed: %s", exc)
             report.news_failed.append(f"benchmark: {exc}")
 
-        # News
+        # News (portfolio + watchlist keywords merged; portfolio wins on dupes)
         try:
             since = datetime.now(timezone.utc).replace(
                 tzinfo=timezone.utc
@@ -99,6 +113,10 @@ class Orchestrator:
 
             since = since - timedelta(days=max(0, news_days_back))
             keywords = self._container.portfolio_service.keywords_map(portfolio)
+            if watchlist is not None:
+                wl_keywords = self._container.watchlist_service.keywords_map(watchlist)
+                for ticker, kws in wl_keywords.items():
+                    keywords.setdefault(ticker, kws)
             inserted = data.refresh_news(since, keywords_by_ticker=keywords)
             report.news_inserted = inserted
         except Exception as exc:

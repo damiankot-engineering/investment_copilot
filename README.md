@@ -22,6 +22,12 @@ Designed to be:
 ![Investment Copilot — Analiza AI tab](docs/web-gui-analysis-screenshot.png)
 <sub>_Analiza AI — confidence badge, risk overview, grounded alerts with citation chips, and the same quant metrics block (HHI, returns, correlations) the LLM was citing. Regenerate with `python docs/_capture_analysis_screenshot.py`._</sub>
 
+![Investment Copilot — Watchlist tab](docs/web-gui-watchlist-screenshot.png)
+<sub>_Watchlist — research tickers with optional target buy prices, distance to target, and 30-day news count (updated together with portfolio data via the same "Odśwież dane rynkowe" button)._</sub>
+
+![Investment Copilot — Kalendarz tab](docs/web-gui-calendar-screenshot.png)
+<sub>_Kalendarz — upcoming earnings reports parsed from the latest monitoring snapshot's BiznesRadar data (next_report_estimated_date per holding). Annual dividend estimates appear when BR returns a non-zero dividend yield. Empty until the first **Monitoring → Uruchom snapshot**._</sub>
+
 ---
 
 ## Quick Start
@@ -63,6 +69,8 @@ For automation / cron, see [CLI usage](#cli-usage). For full setup details and o
 - **Backtesting** — portfolio-level simulator with three strategies (MA-crossover, time-series momentum, buy & hold). Equal-weight across active sleeves, daily checks, end-of-day fills, no leverage, no shorts, zero costs (v1). Equity curve and a full metrics suite (total / annualized return, volatility, Sharpe @ 252, max drawdown with duration, win rate). Configurable benchmark (`wig20` / `mwig40` / `swig80` / `wig` / `wig30` / arbitrary Stooq ticker) buy-and-hold in the same window.
 - **Groq copilot** — three structured analyses with Polish output: portfolio summary, risk alerts, thesis update. JSON-mode + Pydantic validation, automatic self-correction on schema violations, exponential backoff on transient errors, fast-fail on auth errors.
 - **Grounded analysis** — quantitative metrics (HHI, top-3 concentration, per-holding 30/90/252d returns, distance from 52w high, annualized volatility, beta vs benchmark, top pairwise correlations) are computed in Python and injected into the prompt; the LLM cites specific `metric:KEY` / `news:N` / `fundamentals:TICKER.field` / `previous_report:LABEL` references; hallucinated citations are stripped Python-side before the result reaches the user. The last 2 Markdown reports are folded back in as RAG context so each run is framed as a delta over prior assessments.
+- **Watchlist** — tickers you research but don't own. Separate `watchlist.yaml`, optional `target_buy_price` per item (UI flags when current price hits the target), last price from the same OHLCV cache. **Update data** now refreshes watchlist OHLCV alongside portfolio holdings and merges watchlist keywords into the RSS news pipeline, so each item shows a 30-day news count next to its price. Edit through the Web GUI dialog or the YAML directly.
+- **Forward-looking calendar** — earnings report dates pulled from the latest monitoring snapshot's BiznesRadar fields (`next_report_estimated_date` per holding), plus annual dividend estimates (`yield × market_value`). Date-less dividend estimates are surfaced as yearly totals; actual ex-dividend / payment dates require a separate scraper (planned).
 - **CLI** — Typer-based commands (`update-data`, `run-analysis`, `backtest`, `generate-report`) with Rich-rendered tables, severity-coloured risk panels, sensible exit codes, and graceful degradation when the LLM is unreachable.
 - **Markdown reports** — generated to `reports/`, fully Polish, with portfolio table, backtest metrics vs benchmark, AI sections, and warnings.
 - **Local persistence** — SQLite for news + metadata, parquet for OHLCV. Restart-safe, queryable, no ORM overhead.
@@ -174,6 +182,8 @@ investment-copilot/
 │   ├── domain/
 │   │   ├── models.py                 # core types (Ticker, NewsItem, ...)
 │   │   ├── portfolio.py              # Holding, Portfolio, status models
+│   │   ├── watchlist.py              # WatchlistItem, Watchlist (research tickers)
+│   │   ├── calendar.py               # CalendarEvent, CalendarBundle (forward-looking)
 │   │   ├── fundamentals.py           # fundamentals + monitoring snapshots
 │   │   ├── analysis_metrics.py       # HHI, beta, returns, correlations, CitationRegistry
 │   │   ├── strategies/               # MACrossover, Momentum, BuyAndHold
@@ -190,6 +200,8 @@ investment-copilot/
 │   │   ├── backtest_service.py
 │   │   ├── copilot_service.py        # LLM analyses + citation validation
 │   │   ├── analysis_history.py       # RAG loader over reports/*.md
+│   │   ├── watchlist_service.py      # watchlist YAML + status enrichment
+│   │   ├── calendar_service.py       # forward-looking events aggregator
 │   │   ├── monitoring_service.py
 │   │   ├── report_service.py
 │   │   ├── container.py              # ServiceContainer factory
@@ -438,6 +450,8 @@ Uvicorn binds **127.0.0.1** by default — single-user, no auth. Do not pass `--
 | Tab | Endpoints | What it does |
 |---|---|---|
 | 📊 **Portfolio** | `GET/PUT /api/portfolio`, `/portfolio/status`, `POST /api/data/update` | Live PnL, holdings table, allocation donut, edit dialog, market-data refresh |
+| 👁️ **Watchlist** | `GET/PUT /api/watchlist`, `/watchlist/status` | Tickers you're researching but don't own; optional target buy price + alert when reached; 30-day news count per item |
+| 📅 **Kalendarz** | `GET /api/calendar` | Upcoming earnings reports + annual dividend estimates, sourced from the latest monitoring snapshot |
 | 📈 **Backtest** | `POST /api/backtest` | Strategy picker (3), benchmark dropdown, configurable date range, percent-return equity curve + drawdown, metrics |
 | ✨ **AI Analysis** | `POST /api/analysis` | Polish summary, thesis updates, severity-coded risk alerts |
 | 📄 **Reports** | `GET/POST /api/reports`, `/reports/{name}` | Generate, browse, preview, download Markdown reports |
@@ -634,6 +648,10 @@ The FastAPI app at `investment_copilot.api.main:app` exposes every orchestrator 
 | GET / POST | `/api/reports` | `GenerateReportRequest` on POST | list of reports / a new report |
 | GET | `/api/reports/{name}` | — | report content as Markdown |
 | GET | `/api/reports/{name}/download` | — | file download |
+| GET | `/api/watchlist` | — | `WatchlistDTO` (tickers + target prices + notes) |
+| PUT | `/api/watchlist` | `WatchlistDTO` | round-trips through `Watchlist` validators and writes `watchlist.yaml` (with `.bak`) |
+| GET | `/api/watchlist/status` | — | `WatchlistStatusDTO` with last price + distance to target + alert flag per item |
+| GET | `/api/calendar` | — | `CalendarBundleDTO` (upcoming reports + annual dividend estimates, sorted) |
 | POST | `/api/monitoring` | `RunMonitoringRequest` | `MonitoringSnapshotDTO` (items + historical reports + full `MonitoringReport`) |
 | GET | `/api/monitoring/reports` | — | list of monitoring HTML files |
 | GET | `/api/monitoring/reports/{name}` | — | rendered HTML |
@@ -646,6 +664,7 @@ The API resolves config and portfolio paths from these env vars at startup (no f
 |---|---|---|
 | `COPILOT_CONFIG` | `config.yaml` | API + CLI |
 | `COPILOT_PORTFOLIO` | _(value in `config.yaml`)_ | API + CLI |
+| `COPILOT_WATCHLIST` | `watchlist.yaml` next to the portfolio | API only |
 | `GROQ_API_KEY` | — (required for AI / monitoring) | LLM client |
 | `STOOQ_API_KEY` | — (required for OHLCV) | Stooq provider |
 
@@ -704,6 +723,7 @@ curl -s -X POST http://localhost:8000/api/reports \
 | Equity curve shows wild values like **+30000%** | Stale uvicorn — adapter changes haven't loaded. Restart the process, or launch with `--reload`. |
 | Monitoring snapshot crashes with **`ImportError: lxml`** | `pip install lxml` (or `uv pip install lxml`). BiznesRadar fundamentals use `pd.read_html`, which needs lxml. Now in core deps; older venvs may not have it. |
 | Web GUI loads but `/api/*` calls show **CORS errors** in console | You opened `index.html` directly (file://) instead of through uvicorn. Use `http://localhost:8000`, not `file:///.../index.html`. |
+| New sidebar tabs (e.g. Watchlist, Kalendarz) don't appear after a pull/restart | Browser cached the old `index.html` / `*.jsx`. The backend now sends `Cache-Control: no-cache` for static files so this shouldn't happen anymore; if it does, hard-refresh once (Ctrl+Shift+R). |
 | `.env decoded as UTF-16 LE` warning | Notepad saved your `.env` as "Unicode". The loader handles it, but to silence the warning re-save as UTF-8 (without BOM). VS Code status bar → "Save with Encoding" → UTF-8. |
 | `uv sync` fails with **"Process cannot access the file ... streamlit.exe"** | Streamlit is still running and holds the venv lock. Stop the Streamlit process (Ctrl+C), retry. |
 | All five tabs animate in on first load | Expected — every tab is mounted at startup so state persists across switches. Animations only run once per tab. |

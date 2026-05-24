@@ -1,0 +1,31 @@
+# Investment Copilot — example watchlist.
+#
+# Tickers you're researching but don't own yet. Stooq form (`ccc.pl`); short
+# variants (`CCC`, `CCC.WA`) are normalized automatically on save.
+#
+# `target_buy_price` is optional — the UI flags the row when the live close
+# drops to or below this level.
+
+items:
+  - ticker: ccc.pl
+    name: CCC
+    added_date: 2026-05-10
+    target_buy_price: 80.00
+    notes: |
+      Czekam na potwierdzenie marż w Q1 2026 i spadek poniżej 80 PLN.
+    keywords: [CCC, retail, obuwie]
+
+  - ticker: dnp.pl
+    name: Dino Polska
+    added_date: 2026-05-12
+    notes: |
+      Obserwuję rozwój sieci po wynikach Q4 2025. Wycena wysoka, czekam na korektę.
+    keywords: [Dino, retail, sklepy]
+
+  - ticker: kgh.pl
+    name: KGHM
+    added_date: 2026-04-28
+    target_buy_price: 130.00
+    notes: |
+      Ekspozycja na cykl miedzi. Wejście przy ~130 PLN, jeśli cena miedzi nadal mocna.
+    keywords: [KGHM, miedź, surowce]

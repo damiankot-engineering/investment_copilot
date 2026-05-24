@@ -62,6 +62,14 @@
     putPortfolio:        (portfolio) => request('PUT', '/api/portfolio', { body: portfolio }),
     getPortfolioStatus:  () => request('GET', '/api/portfolio/status'),
 
+    // Watchlist
+    getWatchlist:        () => request('GET', '/api/watchlist'),
+    putWatchlist:        (wl) => request('PUT', '/api/watchlist', { body: wl }),
+    getWatchlistStatus:  () => request('GET', '/api/watchlist/status'),
+
+    // Calendar
+    getCalendar:         () => request('GET', '/api/calendar'),
+
     // Data
     updateData:    (newsDaysBack = 14) =>
       request('POST', '/api/data/update', { query: { news_days_back: newsDaysBack } }),

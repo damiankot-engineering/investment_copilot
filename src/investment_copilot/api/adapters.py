@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 from investment_copilot.api.schemas import (
     AnalysisBundleDTO,
     BacktestMetricsDTO,
     BacktestResultDTO,
+    CalendarBundleDTO,
+    CalendarEventDTO,
     CitationDTO,
     CorrelationPairDTO,
     DrawdownPoint,
@@ -20,9 +24,19 @@ from investment_copilot.api.schemas import (
     PortfolioStatusDTO,
     RiskAlertDTO,
     ThesisUpdateDTO,
+    WatchlistDTO,
+    WatchlistItemDTO,
+    WatchlistItemStatusDTO,
+    WatchlistStatusDTO,
 )
 from investment_copilot.domain.analysis_metrics import PortfolioMetrics
+from investment_copilot.domain.calendar import CalendarBundle, CalendarEvent
 from investment_copilot.domain.prompts import Citation
+from investment_copilot.domain.watchlist import Watchlist, WatchlistItem
+from investment_copilot.services.watchlist_service import (
+    WatchlistItemStatus,
+    WatchlistStatus,
+)
 from investment_copilot.domain.backtest import BacktestResult, StrategyMetrics
 from investment_copilot.domain.portfolio import (
     Holding,
@@ -242,6 +256,77 @@ def risk_alerts_to_dtos(r: RiskAlerts) -> tuple[str, list[RiskAlertDTO]]:
         for a in r.alerts
     ]
     return r.overview, alerts
+
+
+# --- Watchlist --------------------------------------------------------------
+
+
+def watchlist_item_to_dto(it: WatchlistItem) -> WatchlistItemDTO:
+    return WatchlistItemDTO(
+        ticker=it.ticker,
+        display_ticker=display_ticker(it.ticker),
+        name=it.name,
+        added_date=it.added_date,
+        target_buy_price=it.target_buy_price,
+        notes=it.notes,
+        keywords=list(it.keywords),
+    )
+
+
+def watchlist_to_dto(wl: Watchlist) -> WatchlistDTO:
+    return WatchlistDTO(items=[watchlist_item_to_dto(it) for it in wl.items])
+
+
+def watchlist_item_status_to_dto(s: WatchlistItemStatus) -> WatchlistItemStatusDTO:
+    return WatchlistItemStatusDTO(
+        ticker=s.ticker,
+        display_ticker=display_ticker(s.ticker),
+        name=s.name,
+        added_date=s.added_date,
+        target_buy_price=s.target_buy_price,
+        notes=s.notes,
+        keywords=list(s.keywords),
+        last_price=s.last_price,
+        last_price_date=s.last_price_date,
+        distance_to_target_pct=s.distance_to_target_pct,
+        alert=s.alert,
+        news_count_30d=s.news_count_30d,
+    )
+
+
+def watchlist_status_to_dto(status: WatchlistStatus) -> WatchlistStatusDTO:
+    return WatchlistStatusDTO(
+        as_of=status.as_of,
+        items=[watchlist_item_status_to_dto(it) for it in status.items],
+        missing_data=list(status.missing_data),
+    )
+
+
+# --- Calendar ---------------------------------------------------------------
+
+
+def calendar_event_to_dto(e: CalendarEvent) -> CalendarEventDTO:
+    days_until = (e.event_date - date.today()).days if e.event_date else None
+    return CalendarEventDTO(
+        ticker=e.ticker,
+        display_ticker=display_ticker(e.ticker),
+        name=e.name,
+        kind=e.kind,
+        event_date=e.event_date,
+        label=e.label,
+        description=e.description,
+        importance=e.importance,
+        amount_pln=e.amount_pln,
+        days_until=days_until,
+    )
+
+
+def calendar_bundle_to_dto(bundle: CalendarBundle) -> CalendarBundleDTO:
+    return CalendarBundleDTO(
+        events=[calendar_event_to_dto(e) for e in bundle.events],
+        snapshot_age_days=bundle.snapshot_age_days,
+        warnings=list(bundle.warnings),
+    )
 
 
 def portfolio_metrics_to_dto(m: PortfolioMetrics) -> PortfolioMetricsDTO:

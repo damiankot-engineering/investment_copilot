@@ -41,6 +41,20 @@ def get_portfolio_path(
     return Path(container.config.portfolio.path)
 
 
+def get_watchlist_path(
+    pf_path: Annotated[Path, Depends(get_portfolio_path)],
+) -> Path:
+    """Resolve the watchlist YAML path.
+
+    Defaults to ``watchlist.yaml`` next to the portfolio file. Override
+    with ``COPILOT_WATCHLIST`` env var (mirrors COPILOT_PORTFOLIO).
+    """
+    override = os.environ.get("COPILOT_WATCHLIST")
+    if override:
+        return Path(override)
+    return pf_path.with_name("watchlist.yaml")
+
+
 def get_orchestrator(
     container: Annotated[ServiceContainer, Depends(get_container)],
 ) -> Orchestrator:

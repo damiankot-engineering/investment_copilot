@@ -31,10 +31,12 @@ from investment_copilot.infrastructure.providers import (
 )
 from investment_copilot.infrastructure.storage import ParquetCache, SQLiteStore
 from investment_copilot.services.backtest_service import BacktestService
+from investment_copilot.services.calendar_service import CalendarService
 from investment_copilot.services.copilot_service import CopilotService
 from investment_copilot.services.data_service import DataService
 from investment_copilot.services.monitoring_service import MonitoringService
 from investment_copilot.services.portfolio_service import PortfolioService
+from investment_copilot.services.watchlist_service import WatchlistService
 
 
 @dataclass(slots=True, frozen=True)
@@ -56,6 +58,8 @@ class ServiceContainer:
     backtest_service: BacktestService
     copilot_service: CopilotService
     monitoring_service: MonitoringService
+    watchlist_service: WatchlistService
+    calendar_service: CalendarService
 
 
 def build_container(config: AppConfig) -> ServiceContainer:
@@ -97,6 +101,8 @@ def build_container(config: AppConfig) -> ServiceContainer:
         biznesradar_provider=BiznesRadarProvider(),
         fundamentals_provider=StooqFundamentalsProvider(),
     )
+    watchlist_service = WatchlistService(data_service=data_service)
+    calendar_service = CalendarService(monitoring_service=monitoring_service)
 
     return ServiceContainer(
         config=config,
@@ -110,4 +116,6 @@ def build_container(config: AppConfig) -> ServiceContainer:
         backtest_service=backtest_service,
         copilot_service=copilot_service,
         monitoring_service=monitoring_service,
+        watchlist_service=watchlist_service,
+        calendar_service=calendar_service,
     )
