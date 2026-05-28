@@ -2,6 +2,7 @@
 
 from investment_copilot.services.backtest_service import BacktestService
 from investment_copilot.services.container import ServiceContainer, build_container
+from investment_copilot.services.company_report_service import CompanyReportService
 from investment_copilot.services.copilot_service import CopilotService
 from investment_copilot.services.data_service import DataService, RefreshReport
 from investment_copilot.services.monitoring_service import MonitoringService
@@ -28,6 +29,7 @@ from investment_copilot.services.watchlist_service import (
 __all__ = [
     "AnalysisBundle",
     "BacktestService",
+    "CompanyReportService",
     "CopilotService",
     "DataService",
     "FullReport",

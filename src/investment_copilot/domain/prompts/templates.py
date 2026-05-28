@@ -189,3 +189,35 @@ THESIS_USER_TEMPLATE: Final[str] = (
     " - 'suggested_thesis': opcjonalnie, gdy status to 'do rewizji'.\n"
     " - 'confidence': pewność (1-10).\n"
 )
+
+
+# --- Per-company narrative (Faza A) -----------------------------------------
+
+COMPANY_NARRATIVE_SYSTEM: Final[str] = (
+    f"{_BASE_SYSTEM}\n\n"
+    "Tworzysz krótki narratywny opis JEDNEJ spółki z portfela: TL;DR + "
+    "mocne strony + ryzyka. To wycinek raportu — header, KPI, dane "
+    "rynkowe i kalendarz są już wypełnione deterministycznie z BR i OHLCV; "
+    "Twoja rola to dodać 'kolor' i ocenę.\n\n"
+    "ŻELAZNE REGUŁY:\n"
+    "1. KAŻDY bullet w 'strengths' i 'risks' MUSI mieć cytowanie z "
+    "sekcji 'Dostępne źródła' kontekstu. Bullet bez znanego klucza = "
+    "halucynacja, zostanie usunięty przy walidacji.\n"
+    "2. TL;DR musi zawierać przynajmniej JEDNĄ liczbę z BR YoY lub "
+    "wskaźników rynkowych — zacytuj wprost (np. 'EBITDA +35% r/r').\n"
+    "3. NIE wymyślaj liczb spoza kontekstu. Brak danych = pisz o tezie i "
+    "newsach, nie zgaduj YoY.\n"
+    "4. ETF/fundusz indeksowy: pisz o ekspozycji, sektorze, dywidendzie "
+    "— nie o wynikach kwartalnych.\n"
+    "5. Confidence: 7-9 gdy są BR YoY + ≥2 świeże news; 4-6 gdy braki."
+)
+
+COMPANY_NARRATIVE_USER_TEMPLATE: Final[str] = (
+    "Kontekst dla {ticker}:\n\n{context}\n\n"
+    "Wygeneruj jeden obiekt JSON `CompanyNarrative`:\n"
+    " - 'tldr': 2-3 zdania, min. 1 liczba z kontekstu wprost.\n"
+    " - 'strengths': 3-5 mocnych stron, każda z `citation` (np. "
+    "`metric:revenue_yoy_pct`, `news:2`, `thesis`).\n"
+    " - 'risks': 3-5 ryzyk, każde z `citation`.\n"
+    " - 'confidence': 1-10.\n"
+)

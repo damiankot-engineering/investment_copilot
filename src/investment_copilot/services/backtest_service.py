@@ -174,6 +174,11 @@ class BacktestService:
         benchmark_override: str | None = None,
     ) -> tuple[str | None, pd.Series | None]:
         symbol = benchmark_override or self._bt_cfg.benchmark
+        # Auto-extend the benchmark cache backwards if the user requested a
+        # start date earlier than what we have on disk. Without this, picking
+        # e.g. 2025-12-01 in the UI silently chops the benchmark line at
+        # whatever the cache's earliest date happens to be.
+        self._ensure_benchmark_covers(symbol, start, end)
         df = self._data.load_benchmark(symbol, start=start, end=end)
         if df is None or df.empty:
             return None, None
@@ -190,6 +195,41 @@ class BacktestService:
         from investment_copilot.domain.models import resolve_benchmark
 
         return resolve_benchmark(symbol), equity
+
+    def _ensure_benchmark_covers(
+        self, symbol: str, start: date, end: date | None
+    ) -> None:
+        """Refresh the benchmark cache backwards if it doesn't cover ``start``.
+
+        Best-effort — if the refresh fails (network down, provider rate
+        limited), fall through to whatever is on disk. Adds a small
+        padding so we have a price ON the start date (else the first
+        comparison point sits later than the portfolio's).
+        """
+        try:
+            cached = self._data.load_benchmark(symbol)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Benchmark cache probe failed for %s: %s", symbol, exc)
+            cached = None
+        if cached is None or cached.empty:
+            need_refresh = True
+        else:
+            earliest = cached.index.min().date()
+            need_refresh = earliest > start
+        if not need_refresh:
+            return
+        load_start = start - timedelta(days=5)
+        logger.info(
+            "Backtest: extending benchmark %s cache backwards to %s",
+            symbol, load_start,
+        )
+        try:
+            self._data.refresh_benchmark(symbol, start=load_start, end=end)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Benchmark backfill for %s failed (%s) — using cached range only.",
+                symbol, exc,
+            )
 
     @staticmethod
     def _strategy_params(strategy: Strategy) -> dict[str, float | int | str]:

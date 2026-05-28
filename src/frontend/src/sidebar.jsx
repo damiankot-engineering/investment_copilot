@@ -3,11 +3,10 @@
 const SIDEBAR_NAV = [
   { id: 'portfolio',  label: 'Portfel',        icon: 'wallet',   hint: 'Pozycje i KPI' },
   { id: 'watchlist',  label: 'Watchlist',      icon: 'eye',      hint: 'Tickery do śledzenia' },
-  { id: 'calendar',   label: 'Kalendarz',      icon: 'calendar', hint: 'Raporty i dywidendy' },
   { id: 'backtest',   label: 'Backtest',       icon: 'barChart', hint: 'Strategie i metryki' },
   { id: 'analysis',   label: 'Analiza AI',     icon: 'sparkles', hint: 'Risk alerts i podsumowanie' },
   { id: 'reports',    label: 'Raporty',        icon: 'fileText', hint: 'Markdown reports' },
-  { id: 'monitoring', label: 'Monitoring',     icon: 'activity', hint: 'Status tez' },
+  { id: 'monitoring', label: 'Monitoring',     icon: 'activity', hint: 'Raporty per spółka + kalendarz' },
 ];
 
 function Sidebar({ active, onChange, asOf }) {

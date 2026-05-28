@@ -2,7 +2,7 @@
 
 const { motion: RMot } = window.Motion;
 
-function ReportRow({ report, i, onView }) {
+function ReportRow({ report, i, onView, onDelete }) {
   return (
     <RMot.div
       initial={{ opacity: 0, y: 8 }}
@@ -30,6 +30,13 @@ function ReportRow({ report, i, onView }) {
       <div className="flex items-center gap-1.5 opacity-70 group-hover:opacity-100 transition-opacity">
         <Button variant="ghost" size="sm" icon="eye" onClick={() => onView(report)}>Podgląd</Button>
         <Button variant="ghost" size="sm" icon="download">Pobierz</Button>
+        <button
+          onClick={() => onDelete(report)}
+          title="Usuń raport"
+          className="h-7 w-7 rounded-md text-white/45 hover:text-accent-red hover:bg-accent-red/10 border border-white/[0.06] hover:border-accent-red/25 flex items-center justify-center transition-colors"
+        >
+          <Icon name="trash" size={13} />
+        </button>
       </div>
     </RMot.div>
   );
@@ -68,6 +75,18 @@ function ReportsTab() {
       toast.error('Generowanie nie powiodło się', err.detail || err.message);
     } finally {
       setGenerating(false);
+    }
+  };
+
+  const onDelete = async (report) => {
+    if (!window.confirm(`Usunąć raport ${report.name}?\n\nTej operacji nie da się cofnąć.`)) return;
+    try {
+      await window.API.deleteReport(report.name);
+      await refresh();
+      toast.success('Raport usunięty', report.name);
+    } catch (err) {
+      console.error(err);
+      toast.error('Usunięcie nie powiodło się', err.detail || err.message);
     }
   };
 
@@ -127,7 +146,7 @@ function ReportsTab() {
           />
         ) : (
           reports.map((r, i) => (
-            <ReportRow key={r.name} report={r} i={i} onView={openReport} />
+            <ReportRow key={r.name} report={r} i={i} onView={openReport} onDelete={onDelete} />
           ))
         )}
       </div>

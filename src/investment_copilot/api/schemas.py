@@ -275,7 +275,13 @@ class WatchlistItemDTO(BaseModel):
     """A watchlist entry as the frontend sees it."""
 
     ticker: str
-    display_ticker: str
+    display_ticker: str = Field(
+        default="",
+        description=(
+            "Short display form, e.g. 'CDR'. Set by the backend on GET; "
+            "ignored on PUT (the backend re-derives it from `ticker`)."
+        ),
+    )
     name: str | None = None
     added_date: date
     target_buy_price: float | None = None

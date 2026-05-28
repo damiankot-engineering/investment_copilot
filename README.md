@@ -69,8 +69,8 @@ For automation / cron, see [CLI usage](#cli-usage). For full setup details and o
 - **Backtesting** — portfolio-level simulator with three strategies (MA-crossover, time-series momentum, buy & hold). Equal-weight across active sleeves, daily checks, end-of-day fills, no leverage, no shorts, zero costs (v1). Equity curve and a full metrics suite (total / annualized return, volatility, Sharpe @ 252, max drawdown with duration, win rate). Configurable benchmark (`wig20` / `mwig40` / `swig80` / `wig` / `wig30` / arbitrary Stooq ticker) buy-and-hold in the same window.
 - **Groq copilot** — three structured analyses with Polish output: portfolio summary, risk alerts, thesis update. JSON-mode + Pydantic validation, automatic self-correction on schema violations, exponential backoff on transient errors, fast-fail on auth errors.
 - **Grounded analysis** — quantitative metrics (HHI, top-3 concentration, per-holding 30/90/252d returns, distance from 52w high, annualized volatility, beta vs benchmark, top pairwise correlations) are computed in Python and injected into the prompt; the LLM cites specific `metric:KEY` / `news:N` / `fundamentals:TICKER.field` / `previous_report:LABEL` references; hallucinated citations are stripped Python-side before the result reaches the user. The last 2 Markdown reports are folded back in as RAG context so each run is framed as a delta over prior assessments.
-- **Watchlist** — tickers you research but don't own. Separate `watchlist.yaml`, optional `target_buy_price` per item (UI flags when current price hits the target), last price from the same OHLCV cache. **Update data** now refreshes watchlist OHLCV alongside portfolio holdings and merges watchlist keywords into the RSS news pipeline, so each item shows a 30-day news count next to its price. Edit through the Web GUI dialog or the YAML directly.
-- **Forward-looking calendar** — earnings report dates pulled from the latest monitoring snapshot's BiznesRadar fields (`next_report_estimated_date` per holding), plus annual dividend estimates (`yield × market_value`). Date-less dividend estimates are surfaced as yearly totals; actual ex-dividend / payment dates require a separate scraper (planned).
+- **Watchlist** — tickers you research but don't own. Separate `watchlist.yaml` (gitignored alongside `portfolio.yaml`), optional `target_buy_price` per item (UI flags when current price hits the target), last price from the same OHLCV cache. **Update data** now refreshes watchlist OHLCV alongside portfolio holdings and merges watchlist keywords into the RSS news pipeline, so each item shows a 30-day news count next to its price. Edit through the Web GUI dialog or the YAML directly.
+- **Per-company monitoring** — each holding gets its own snapshot card with a **deterministic factsheet** (BR YoY for revenue/EBITDA/net profit, P/E, market cap, 52w range from OHLCV overlay, position PnL, sector, last quarter, next report countdown). The 4×2 KPI grid + market section + investor calendar render instantly with no LLM call. Click **Generate AI report** on a card to run ONE focused LLM call per ticker (TL;DR + 3-5 strengths + 3-5 risks, ~1.5k input tokens, must-cite validation — bullets without a known `metric:` / `news:N` / `fundamentals:field` / `thesis` / `portfolio:field` source are dropped Python-side). The whole portfolio's upcoming-reports calendar sits at the top of the tab. Each report is downloadable as a **standalone HTML** in the same equity-research one-pager template (light/dark themes, Fraunces serif + JetBrains Mono), persisted per-ticker in SQLite for the next visit. Replaces the legacy bulk-snapshot flow, which kept blowing past Groq's 12k TPM limit.
 - **CLI** — Typer-based commands (`update-data`, `run-analysis`, `backtest`, `generate-report`) with Rich-rendered tables, severity-coloured risk panels, sensible exit codes, and graceful degradation when the LLM is unreachable.
 - **Markdown reports** — generated to `reports/`, fully Polish, with portfolio table, backtest metrics vs benchmark, AI sections, and warnings.
 - **Local persistence** — SQLite for news + metadata, parquet for OHLCV. Restart-safe, queryable, no ORM overhead.
@@ -100,7 +100,7 @@ flowchart TB
     PORT[PortfolioService]:::svc
     BACK[BacktestService]:::svc
     COP[CopilotService]:::svc
-    MON[MonitoringService]:::svc
+    CR[CompanyReportService]:::svc
     REP[ReportService]:::svc
 
     DOM["Domain<br/>Pydantic models · backtest engine · strategies<br/>metrics · prompt templates"]:::dom
@@ -112,11 +112,11 @@ flowchart TB
     CLI  --> ORCH
     ST   --> ORCH
     API  --> ORCH
-    ORCH --> DATA & PORT & BACK & COP & MON & REP
-    DATA & PORT & BACK & COP & MON & REP --> DOM
-    DATA & MON --> PROV
-    DATA --> STOR
-    COP & MON --> LLM
+    ORCH --> DATA & PORT & BACK & COP & CR & REP
+    DATA & PORT & BACK & COP & CR & REP --> DOM
+    DATA & CR --> PROV
+    DATA & CR --> STOR
+    COP & CR --> LLM
 ```
 
 Dependency rule: arrows point **downward only**. Domain knows nothing about infrastructure. Services depend on domain + infrastructure interfaces. Orchestration depends on services. Entrypoints depend on the orchestrator.
@@ -171,10 +171,11 @@ investment-copilot/
 ├── pyproject.toml
 ├── config.example.yaml
 ├── portfolio.example.yaml
+├── watchlist.example.yaml
 ├── .env.example
 ├── streamlit_app.py                  # Streamlit GUI entrypoint
 ├── data/                             # gitignored (cache + parquet)
-├── reports/                          # gitignored (Markdown + monitoring HTML)
+├── reports/                          # gitignored (Markdown reports)
 ├── src/investment_copilot/
 │   ├── cli.py                        # Typer app
 │   ├── orchestrator.py               # named pipelines
@@ -183,12 +184,13 @@ investment-copilot/
 │   │   ├── models.py                 # core types (Ticker, NewsItem, ...)
 │   │   ├── portfolio.py              # Holding, Portfolio, status models
 │   │   ├── watchlist.py              # WatchlistItem, Watchlist (research tickers)
-│   │   ├── calendar.py               # CalendarEvent, CalendarBundle (forward-looking)
+│   │   ├── calendar.py               # CalendarEvent, CalendarBundle (legacy aggregator)
 │   │   ├── fundamentals.py           # fundamentals + monitoring snapshots
+│   │   ├── company_report.py         # CompanyReport (per-ticker snapshot schema)
 │   │   ├── analysis_metrics.py       # HHI, beta, returns, correlations, CitationRegistry
 │   │   ├── strategies/               # MACrossover, Momentum, BuyAndHold
 │   │   ├── backtest/                 # engine, metrics, results
-│   │   └── prompts/                  # context builder, schemas, templates (+ Citation)
+│   │   └── prompts/                  # context builder, schemas, templates (+ CompanyNarrative)
 │   ├── infrastructure/
 │   │   ├── providers/                # Stooq, RSS, BiznesRadar, factory
 │   │   ├── llm/                      # GroqClient, factory, errors
@@ -201,8 +203,9 @@ investment-copilot/
 │   │   ├── copilot_service.py        # LLM analyses + citation validation
 │   │   ├── analysis_history.py       # RAG loader over reports/*.md
 │   │   ├── watchlist_service.py      # watchlist YAML + status enrichment
-│   │   ├── calendar_service.py       # forward-looking events aggregator
-│   │   ├── monitoring_service.py
+│   │   ├── calendar_service.py       # legacy events aggregator (still wired)
+│   │   ├── monitoring_service.py     # legacy bulk-snapshot pipeline (still wired)
+│   │   ├── company_report_service.py # per-ticker factsheet + AI report + kv_cache
 │   │   ├── report_service.py
 │   │   ├── container.py              # ServiceContainer factory
 │   │   └── pipeline_results.py
@@ -211,14 +214,16 @@ investment-copilot/
 │       ├── main.py                   # app factory + all routes
 │       ├── schemas.py                # wire DTOs
 │       ├── adapters.py               # domain → DTO conversions
-│       └── deps.py                   # FastAPI dependencies
+│       ├── deps.py                   # FastAPI dependencies
+│       └── templates/                # standalone HTML (company_report.html)
 ├── src/frontend/                     # Web GUI (CDN React, no build step)
 │   ├── index.html                    # Tailwind via CDN, Babel-transpiled JSX
 │   └── src/
 │       ├── app.jsx                   # tab shell + state
 │       ├── api.jsx                   # window.API fetch wrappers
 │       ├── portfolio.jsx · backtest.jsx · analysis.jsx
-│       ├── reports.jsx · monitoring.jsx
+│       ├── watchlist.jsx · reports.jsx
+│       ├── monitoring.jsx · companyReport.jsx   # per-company snapshots + renderer
 │       └── primitives.jsx · sidebar.jsx · icons.jsx · mockData.jsx
 └── tests/                            # pytest suite
 ```
@@ -451,11 +456,10 @@ Uvicorn binds **127.0.0.1** by default — single-user, no auth. Do not pass `--
 |---|---|---|
 | 📊 **Portfolio** | `GET/PUT /api/portfolio`, `/portfolio/status`, `POST /api/data/update` | Live PnL, holdings table, allocation donut, edit dialog, market-data refresh |
 | 👁️ **Watchlist** | `GET/PUT /api/watchlist`, `/watchlist/status` | Tickers you're researching but don't own; optional target buy price + alert when reached; 30-day news count per item |
-| 📅 **Kalendarz** | `GET /api/calendar` | Upcoming earnings reports + annual dividend estimates, sourced from the latest monitoring snapshot |
-| 📈 **Backtest** | `POST /api/backtest` | Strategy picker (3), benchmark dropdown, configurable date range, percent-return equity curve + drawdown, metrics |
+| 📈 **Backtest** | `POST /api/backtest` | Strategy picker (3), benchmark dropdown, configurable date range, percent-return equity curve + drawdown, metrics. Benchmark cache auto-extends backwards when you pick a start date earlier than what's on disk. |
 | ✨ **AI Analysis** | `POST /api/analysis` | Polish summary, thesis updates, severity-coded risk alerts |
 | 📄 **Reports** | `GET/POST /api/reports`, `/reports/{name}` | Generate, browse, preview, download Markdown reports |
-| 👁️ **Monitoring** | `POST /api/monitoring`, `/monitoring/reports` | LLM-driven thesis-monitoring snapshots, historical HTML reports (no CLI equivalent in v1) |
+| 📡 **Monitoring** | `/api/companies/{ticker}/factsheet · /report · /report.html`, `/api/companies/upcoming` | Per-company snapshots: instant deterministic factsheet on tab open, on-demand AI narrative per card, standalone HTML download, upcoming-reports calendar at the top of the tab |
 
 State persists across tab switches — once you run a backtest or analysis, the result stays visible until you re-run it.
 
@@ -648,13 +652,18 @@ The FastAPI app at `investment_copilot.api.main:app` exposes every orchestrator 
 | GET / POST | `/api/reports` | `GenerateReportRequest` on POST | list of reports / a new report |
 | GET | `/api/reports/{name}` | — | report content as Markdown |
 | GET | `/api/reports/{name}/download` | — | file download |
+| DELETE | `/api/reports/{name}` | — | remove a single Markdown report (204) |
 | GET | `/api/watchlist` | — | `WatchlistDTO` (tickers + target prices + notes) |
 | PUT | `/api/watchlist` | `WatchlistDTO` | round-trips through `Watchlist` validators and writes `watchlist.yaml` (with `.bak`) |
 | GET | `/api/watchlist/status` | — | `WatchlistStatusDTO` with last price + distance to target + alert flag per item |
-| GET | `/api/calendar` | — | `CalendarBundleDTO` (upcoming reports + annual dividend estimates, sorted) |
-| POST | `/api/monitoring` | `RunMonitoringRequest` | `MonitoringSnapshotDTO` (items + historical reports + full `MonitoringReport`) |
-| GET | `/api/monitoring/reports` | — | list of monitoring HTML files |
-| GET | `/api/monitoring/reports/{name}` | — | rendered HTML |
+| GET | `/api/companies/{ticker}/factsheet` | — | `CompanyReport` with deterministic sections only (no LLM); placeholder TL;DR. Typical <1s |
+| GET | `/api/companies/{ticker}/report` | — | cached AI-generated `CompanyReport`, or `null` if never generated |
+| POST | `/api/companies/{ticker}/report` | — | run ONE LLM call (must-cite narrative), persist to SQLite `kv_cache`, return full `CompanyReport` |
+| GET | `/api/companies/{ticker}/report.html` | — | standalone HTML download (template + injected JSON); falls back to factsheet if no cached AI report |
+| GET | `/api/companies/upcoming` | — | upcoming-reports calendar across the whole portfolio (sorted, closest first) |
+| GET | `/api/calendar` | — | **(legacy)** `CalendarBundleDTO` — replaced by `/api/companies/upcoming` in the UI |
+| POST | `/api/monitoring` | `RunMonitoringRequest` | **(legacy)** old bulk-snapshot pipeline; the UI no longer calls it but it still works |
+| GET / DELETE | `/api/monitoring/reports{/name}` | — | **(legacy)** old monitoring HTML report list / single / delete |
 
 ### Environment variables
 
@@ -694,11 +703,25 @@ curl -s -X POST 'http://localhost:8000/api/backtest?strategy=buy_and_hold&benchm
 curl -s -X POST http://localhost:8000/api/reports \
   -H 'Content-Type: application/json' \
   -d '{"strategy":"buy_and_hold","news_days_back":14}' | jq '.report.name'
+
+# Per-company snapshot — instant deterministic factsheet (no LLM call)
+curl -s http://localhost:8000/api/companies/cbf.pl/factsheet | jq '{name: .company_name, kpis: [.kpis[] | {label, value, trend}]}'
+
+# Run the LLM narrative for one ticker (~3–5 s, ~1.5k input tokens)
+curl -s -X POST http://localhost:8000/api/companies/cbf.pl/report | jq '{tldr, strengths: [.strengths[].text], risks: [.risks[].text]}'
+
+# Download the standalone HTML one-pager (cached if generated, otherwise falls back to factsheet)
+curl -s http://localhost:8000/api/companies/cbf.pl/report.html -o cbf_report.html
+
+# Upcoming reports across the whole portfolio (the calendar at the top of the Monitoring tab)
+curl -s http://localhost:8000/api/companies/upcoming | jq
 ```
 
 ### Design notes
 
 - **Single wiring point.** Both the CLI and the API construct the same `ServiceContainer` via `build_container(load_config(...))`. The API caches it process-wide with `functools.lru_cache`.
+- **Per-company monitoring split.** The new architecture (`/api/companies/*`) replaces the legacy single-call `/api/monitoring` pipeline. Splitting the LLM work to ONE focused per-ticker call (~1.5k input tokens, must-cite output) keeps every request well under Groq's 12k TPM cap, isolates failures (one ticker failing no longer wrecks the whole snapshot), and gives the user fine-grained control over when to spend tokens. The deterministic factsheet renders without any LLM call. Generated reports are persisted in SQLite (`kv_cache` table, key `company_report:{ticker}`) so the next page load shows the prior AI report immediately.
+- **Backtest auto-extends benchmark cache.** When the user picks a start date earlier than the current benchmark cache earliest date, `BacktestService._ensure_benchmark_covers()` triggers a refresh from `start - 5 days` before loading. Best-effort: if the refresh fails (offline / rate limit), the backtest falls through to whatever is on disk rather than aborting.
 - **Wire DTOs decouple frontend from domain.** Domain models use field names like `total_market_value` / `unrealized_pnl_pct` (fractions); the frontend sees `total_value` / `pnl_pct` (percent). Adapters in `api/adapters.py` translate at the wire boundary so neither side has to care about the other's naming. Tickers come back in both forms (`ticker: 'pkn.pl'`, `display_ticker: 'PKN'`).
 - **Sync internals, threaded boundary.** Services and providers are synchronous (Stooq, Groq, BiznesRadar). The API wraps every pipeline call in `asyncio.to_thread`, which is enough for single-user local use. If you ever expose this beyond localhost, replace providers with async-native clients rather than keeping the thread pool growing.
 - **Static frontend co-served.** `StaticFiles(directory=src/frontend, html=True)` is mounted at `/`, so opening `http://localhost:8000` loads `index.html` which then calls `/api/*` on the same origin — no CORS needed in production. CORS is enabled for `localhost:5173` and `localhost:8000` to support split-host dev.

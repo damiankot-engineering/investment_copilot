@@ -60,7 +60,7 @@ function WatchlistRow({ item, i }) {
           <span className="text-white/30">—</span>
         )}
       </td>
-      <td className="px-5 py-3.5 text-[12px] text-white/60 max-w-xs truncate" title={item.notes}>
+      <td className="px-5 py-3.5 text-[12px] text-white/60 whitespace-pre-wrap leading-relaxed min-w-[280px] max-w-[480px]">
         {item.notes || '—'}
       </td>
     </WMot.tr>

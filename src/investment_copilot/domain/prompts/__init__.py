@@ -24,6 +24,8 @@ from investment_copilot.domain.prompts.schemas import (
     ChangeDirection,
     Citation,
     CitationSourceType,
+    CompanyNarrative,
+    CompanyNarrativeBullet,
     HoldingComment,
     MonitoringCalendarEntry,
     MonitoringCompany,
@@ -41,6 +43,8 @@ from investment_copilot.domain.prompts.schemas import (
     ThesisUpdate,
 )
 from investment_copilot.domain.prompts.templates import (
+    COMPANY_NARRATIVE_SYSTEM,
+    COMPANY_NARRATIVE_USER_TEMPLATE,
     MONITORING_SYSTEM,
     MONITORING_USER_TEMPLATE,
     PORTFOLIO_SYSTEM,
@@ -52,9 +56,13 @@ from investment_copilot.domain.prompts.templates import (
 )
 
 __all__ = [
+    "COMPANY_NARRATIVE_SYSTEM",
+    "COMPANY_NARRATIVE_USER_TEMPLATE",
     "ChangeDirection",
     "Citation",
     "CitationSourceType",
+    "CompanyNarrative",
+    "CompanyNarrativeBullet",
     "HoldingComment",
     "MAX_NEWS_PER_TICKER",
     "MAX_NEWS_TOTAL",

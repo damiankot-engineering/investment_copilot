@@ -134,7 +134,6 @@ function App() {
   const tabs = [
     { id: 'portfolio',  node: <PortfolioTab portfolio={portfolio} onUpdatePortfolio={onUpdatePortfolio} onRefresh={onRefresh} refreshing={refreshing} benchmarkLabel={appConfig.benchmark_label} /> },
     { id: 'watchlist',  node: <WatchlistTab /> },
-    { id: 'calendar',   node: <CalendarTab /> },
     { id: 'backtest',   node: <BacktestTab /> },
     { id: 'analysis',   node: <AnalysisTab /> },
     { id: 'reports',    node: <ReportsTab /> },

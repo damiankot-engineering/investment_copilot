@@ -2,6 +2,8 @@
 .env
 config.yaml
 portfolio.yaml
+watchlist.yaml
+*.yaml.bak
 
 # Cache & generated artifacts
 data/

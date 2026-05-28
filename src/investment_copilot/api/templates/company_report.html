@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="pl" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Raport spółki · Investment Copilot</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=JetBrains+Mono:wght@400;500&family=Inter+Tight:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root, [data-theme="light"] {
+    --bg: #f4f1ea; --paper: #ffffff;
+    --ink: #0e0e0e; --ink-soft: #3a3a3a; --muted: #6e6a62;
+    --line: #1a1a1a; --hairline: #d8d3c8;
+    --accent: #b3261e; --positive: #1f6b3a; --negative: #b3261e; --neutral: #7a7368;
+    --toggle-bg: #ffffff; --toggle-border: #1a1a1a;
+  }
+  [data-theme="dark"] {
+    --bg: #14110f; --paper: #1c1916;
+    --ink: #ebe5d8; --ink-soft: #b8b3a8; --muted: #888278;
+    --line: #ebe5d8; --hairline: #2f2a25;
+    --accent: #e85a4f; --positive: #5cb985; --negative: #e85a4f; --neutral: #888278;
+    --toggle-bg: #1c1916; --toggle-border: #ebe5d8;
+  }
+  :root { --maxw: 980px; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--ink); font-family: 'Inter Tight', -apple-system, sans-serif; font-size: 15px; line-height: 1.55; -webkit-font-smoothing: antialiased; transition: background 0.2s, color 0.2s; }
+  .page { max-width: var(--maxw); margin: 0 auto; padding: 48px 56px 80px; background: var(--paper); border-left: 1px solid var(--hairline); border-right: 1px solid var(--hairline); min-height: 100vh; transition: background 0.2s; }
+  .theme-toggle { position: fixed; top: 16px; right: 16px; background: var(--toggle-bg); color: var(--ink); border: 1px solid var(--toggle-border); font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: 0.12em; padding: 8px 12px; cursor: pointer; text-transform: uppercase; z-index: 100; transition: all 0.2s; }
+  .theme-toggle:hover { background: var(--ink); color: var(--paper); }
+  .masthead { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2px solid var(--line); padding-bottom: 16px; margin-bottom: 32px; }
+  .masthead-left .eyebrow { font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
+  .masthead-left h1 { font-family: 'Fraunces', serif; font-weight: 600; font-size: 38px; line-height: 1.05; letter-spacing: -0.02em; margin: 0; }
+  .masthead-left h1 .accent { color: var(--accent); font-style: italic; }
+  .masthead-right { text-align: right; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--muted); line-height: 1.7; }
+  .masthead-right strong { color: var(--ink); }
+  section { margin-bottom: 36px; }
+  .section-title { font-family: 'Fraunces', serif; font-weight: 500; font-size: 11px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--muted); border-bottom: 1px solid var(--hairline); padding-bottom: 6px; margin-bottom: 16px; display: flex; justify-content: space-between; }
+  .section-title .num { font-family: 'JetBrains Mono', monospace; font-weight: 400; }
+  .tldr { font-family: 'Fraunces', serif; font-size: 19px; line-height: 1.5; color: var(--ink); padding: 4px 0 8px; }
+  .profile { display: grid; grid-template-columns: 1fr 1fr; gap: 20px 40px; }
+  .field { border-bottom: 1px dotted var(--hairline); padding: 8px 0; }
+  .field .label { font-family: 'JetBrains Mono', monospace; font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); display: block; margin-bottom: 2px; }
+  .field .value { font-size: 14px; color: var(--ink); }
+  .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid var(--line); }
+  .kpi { padding: 14px 16px; border-right: 1px solid var(--hairline); border-bottom: 1px solid var(--hairline); }
+  .kpi:nth-child(4n) { border-right: none; }
+  .kpi:nth-last-child(-n+4) { border-bottom: none; }
+  .kpi .kpi-label { font-family: 'JetBrains Mono', monospace; font-size: 9px; text-transform: uppercase; letter-spacing: 0.14em; color: var(--muted); margin-bottom: 6px; }
+  .kpi .kpi-value { font-family: 'Fraunces', serif; font-size: 22px; font-weight: 500; line-height: 1; letter-spacing: -0.01em; }
+  .kpi .kpi-delta { font-family: 'JetBrains Mono', monospace; font-size: 11px; margin-top: 6px; }
+  .pos { color: var(--positive); } .neg { color: var(--negative); } .neu { color: var(--neutral); }
+  .bullet-list { list-style: none; padding: 0; margin: 0; }
+  .bullet-list li { padding: 8px 0 8px 26px; border-bottom: 1px dotted var(--hairline); position: relative; font-size: 14px; }
+  .bullet-list li:last-child { border-bottom: none; }
+  .bullet-list li::before { content: "—"; position: absolute; left: 0; top: 8px; color: var(--accent); font-family: 'JetBrains Mono', monospace; }
+  .bullet-list.risks li::before { content: "△"; color: var(--negative); }
+  .bullet-list.strengths li::before { content: "+"; color: var(--positive); }
+  .citation { font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--muted); margin-left: 6px; }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; }
+  .col h3 { font-family: 'Fraunces', serif; font-size: 14px; font-weight: 600; margin: 0 0 8px; text-transform: uppercase; letter-spacing: 0.05em; }
+  footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--line); font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--muted); line-height: 1.7; }
+  @media (max-width: 720px) {
+    .page { padding: 24px 20px; }
+    .masthead { flex-direction: column; align-items: flex-start; gap: 12px; }
+    .masthead-right { text-align: left; }
+    .masthead-left h1 { font-size: 28px; }
+    .profile, .two-col { grid-template-columns: 1fr; }
+    .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+    .kpi:nth-child(4n) { border-right: 1px solid var(--hairline); }
+    .kpi:nth-child(2n) { border-right: none; }
+    .kpi:nth-last-child(-n+4) { border-bottom: 1px solid var(--hairline); }
+    .kpi:nth-last-child(-n+2) { border-bottom: none; }
+  }
+</style>
+</head>
+<body>
+<button class="theme-toggle" onclick="toggleTheme()" id="themeToggle">☾ Dark</button>
+<main class="page">
+  <header class="masthead">
+    <div class="masthead-left">
+      <div class="eyebrow" data-field="eyebrow">—</div>
+      <h1><span data-field="company_name">—</span></h1>
+    </div>
+    <div class="masthead-right">
+      <div>Ticker · <strong data-field="ticker">—</strong></div>
+      <div data-field="sector-row" style="display:none">Sektor · <strong data-field="sector">—</strong></div>
+      <div>Raport z dnia · <strong data-field="report_date">—</strong></div>
+    </div>
+  </header>
+
+  <section>
+    <div class="section-title"><span>Streszczenie</span><span class="num">01</span></div>
+    <p class="tldr" data-field="tldr">—</p>
+  </section>
+
+  <section>
+    <div class="section-title"><span data-field="kpi_section_title">Kluczowe wskaźniki</span><span class="num">02</span></div>
+    <div class="kpi-grid" data-field="kpis"></div>
+  </section>
+
+  <section>
+    <div class="section-title"><span>Dane rynkowe i pozycja</span><span class="num">03</span></div>
+    <div class="profile" data-field="market"></div>
+  </section>
+
+  <section>
+    <div class="section-title"><span>Mocne strony vs. ryzyka</span><span class="num">04</span></div>
+    <div class="two-col">
+      <div class="col"><h3>Mocne strony</h3><ul class="bullet-list strengths" data-field="strengths"></ul></div>
+      <div class="col"><h3>Ryzyka</h3><ul class="bullet-list risks" data-field="risks"></ul></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-title"><span>Kalendarz</span><span class="num">05</span></div>
+    <ul class="bullet-list" data-field="calendar"></ul>
+  </section>
+
+  <footer>
+    <div data-field="sources">—</div>
+    <div style="margin-top: 8px;" data-field="disclaimer">—</div>
+  </footer>
+</main>
+
+<script>
+  window.reportData = __REPORT_DATA_JSON__;
+
+  function $(s) { return document.querySelector(s); }
+  function escapeHtml(s) { return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+  function setText(field, value) {
+    document.querySelectorAll('[data-field="' + field + '"]').forEach(function (el) {
+      el.textContent = (value === null || value === undefined || value === "") ? "—" : value;
+    });
+  }
+  function renderProfileGrid(fieldName, items) {
+    var root = $('[data-field="' + fieldName + '"]');
+    if (!root || !Array.isArray(items)) return;
+    root.innerHTML = items.map(function (it) {
+      return '<div class="field"><span class="label">' + escapeHtml(it.label) + '</span><span class="value">' + escapeHtml(it.value) + '</span></div>';
+    }).join("");
+  }
+  function renderKpis(items) {
+    var root = $('[data-field="kpis"]');
+    if (!root || !Array.isArray(items)) return;
+    root.innerHTML = items.map(function (it) {
+      var trend = escapeHtml(it.trend || "neu");
+      return '<div class="kpi"><div class="kpi-label">' + escapeHtml(it.label) + '</div><div class="kpi-value">' + escapeHtml(it.value) + '</div><div class="kpi-delta ' + trend + '">' + escapeHtml(it.delta || "") + '</div></div>';
+    }).join("");
+  }
+  function renderBullets(fieldName, items) {
+    var root = $('[data-field="' + fieldName + '"]');
+    if (!root || !Array.isArray(items)) return;
+    if (items.length === 0) { root.innerHTML = '<li style="color:var(--muted);font-style:italic">Brak danych — wygeneruj raport AI.</li>'; return; }
+    root.innerHTML = items.map(function (it) {
+      var hl = it.highlight ? ('<strong>' + escapeHtml(it.highlight) + '</strong> ') : "";
+      var cit = it.citation ? ('<span class="citation">[' + escapeHtml(it.citation) + ']</span>') : "";
+      return '<li>' + hl + escapeHtml(it.text) + cit + '</li>';
+    }).join("");
+  }
+  function render(data) {
+    ["eyebrow", "company_name", "ticker", "report_date", "tldr", "kpi_section_title", "sector", "sources", "disclaimer"].forEach(function (f) { setText(f, data[f]); });
+    // Show/hide sector row in masthead
+    var sectorRow = document.querySelector('[data-field="sector-row"]');
+    if (sectorRow) sectorRow.style.display = data.sector ? "" : "none";
+    renderProfileGrid("market", data.market);
+    renderKpis(data.kpis);
+    renderBullets("strengths", data.strengths);
+    renderBullets("risks", data.risks);
+    renderBullets("calendar", data.calendar);
+  }
+  function toggleTheme() {
+    var html = document.documentElement;
+    var next = html.getAttribute("data-theme") === "dark" ? "light" : "dark";
+    html.setAttribute("data-theme", next);
+    document.getElementById("themeToggle").textContent = next === "dark" ? "☀ Light" : "☾ Dark";
+    try { localStorage.setItem("cr_theme", next); } catch (e) {}
+  }
+  (function () {
+    var theme = "light";
+    try {
+      var saved = localStorage.getItem("cr_theme");
+      if (saved) theme = saved;
+      else if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) theme = "dark";
+    } catch (e) {}
+    document.documentElement.setAttribute("data-theme", theme);
+    var btn = document.getElementById("themeToggle");
+    if (btn) btn.textContent = theme === "dark" ? "☀ Light" : "☾ Dark";
+  })();
+  document.addEventListener("DOMContentLoaded", function () { render(window.reportData || {}); });
+</script>
+</body>
+</html>

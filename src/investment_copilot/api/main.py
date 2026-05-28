@@ -22,7 +22,7 @@ from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from investment_copilot import __version__
@@ -55,6 +55,7 @@ from investment_copilot.api.schemas import (
     WatchlistDTO,
     WatchlistStatusDTO,
 )
+from investment_copilot.domain.company_report import CalendarItem, CompanyReport
 from investment_copilot.domain.models import BENCHMARK_SYMBOLS, resolve_benchmark
 from investment_copilot.domain.portfolio import Portfolio
 from investment_copilot.domain.strategies import KNOWN_STRATEGIES
@@ -77,6 +78,7 @@ logger = logging.getLogger(__name__)
 # Resolved once at module-import time (used to mount static frontend).
 # `src/investment_copilot/api/main.py` → up 3 → `src/`; then `frontend/`.
 _FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
+_TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 
 _SAFE_FILENAME = re.compile(r"^[A-Za-z0-9._-]+$")
 
@@ -465,6 +467,26 @@ def create_app() -> FastAPI:
             content_md=text,
         )
 
+    @app.delete(
+        "/api/reports/{name}",
+        status_code=204,
+        tags=["reports"],
+    )
+    async def delete_report(
+        name: str,
+        reports_dir: Annotated[Path, Depends(get_reports_dir)],
+    ) -> None:
+        _check_filename(name)
+        path = reports_dir / name
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail=f"Report not found: {name}")
+        try:
+            await asyncio.to_thread(path.unlink)
+        except OSError as exc:
+            raise HTTPException(
+                status_code=500, detail=f"Failed to delete {name}: {exc}"
+            )
+
     @app.get("/api/reports/{name}/download", tags=["reports"])
     async def download_report(
         name: str,
@@ -579,6 +601,176 @@ def create_app() -> FastAPI:
         if not path.is_file():
             raise HTTPException(status_code=404, detail=f"Report not found: {name}")
         return FileResponse(path, media_type="text/html")
+
+    @app.delete(
+        "/api/monitoring/reports/{name}",
+        status_code=204,
+        tags=["monitoring"],
+    )
+    async def delete_monitoring_report(
+        name: str,
+        monitoring_dir: Annotated[Path, Depends(get_monitoring_dir)],
+    ) -> None:
+        """Delete a monitoring HTML report. Leaves snapshot JSONs intact —
+        those drive the prev-report carry-over context for future runs."""
+        _check_filename(name)
+        path = monitoring_dir / name
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail=f"Report not found: {name}")
+        try:
+            await asyncio.to_thread(path.unlink)
+        except OSError as exc:
+            raise HTTPException(
+                status_code=500, detail=f"Failed to delete {name}: {exc}"
+            )
+
+    # --------------------------------------- Per-company report (new monitoring)
+
+    def _norm_ticker(t: str) -> str:
+        # Allow Stooq-style with dot ("pkn.pl"), letters, digits, underscore, dash.
+        if not re.match(r"^[A-Za-z0-9._-]+$", t) or ".." in t:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid ticker: {t!r}",
+            )
+        return t.lower()
+
+    async def _load_pf_and_status(
+        pf_path: Path, container: ServiceContainer,
+    ) -> tuple[Portfolio, object]:
+        portfolio = await asyncio.to_thread(load_portfolio, str(pf_path))
+        status_obj = await asyncio.to_thread(
+            container.portfolio_service.current_status, portfolio
+        )
+        return portfolio, status_obj
+
+    @app.get(
+        "/api/companies/{ticker}/factsheet",
+        response_model=CompanyReport,
+        tags=["companies"],
+    )
+    async def get_company_factsheet(
+        ticker: str,
+        pf_path: Annotated[Path, Depends(get_portfolio_path)],
+        container: Annotated[ServiceContainer, Depends(get_container)],
+    ) -> CompanyReport:
+        """Deterministic per-company snapshot (no LLM call).
+
+        Fast (<1s typical) — fundamentals come from 24h BR cache, OHLCV
+        and news from the local SQLite/parquet stores. tldr/strengths/
+        risks are placeholder strings until ``POST /report`` runs the LLM.
+        """
+        norm = _norm_ticker(ticker)
+        portfolio, status_obj = await _load_pf_and_status(pf_path, container)
+        try:
+            return await asyncio.to_thread(
+                container.company_report_service.build_factsheet,
+                portfolio, status_obj, ticker=norm,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+
+    @app.get(
+        "/api/companies/{ticker}/report",
+        response_model=CompanyReport | None,
+        tags=["companies"],
+    )
+    async def get_cached_company_report(
+        ticker: str,
+        container: Annotated[ServiceContainer, Depends(get_container)],
+    ) -> CompanyReport | None:
+        """Return the most recently generated AI report for a ticker (or null)."""
+        norm = _norm_ticker(ticker)
+        return await asyncio.to_thread(
+            container.company_report_service.get_cached_report, norm,
+        )
+
+    @app.post(
+        "/api/companies/{ticker}/report",
+        response_model=CompanyReport,
+        tags=["companies"],
+    )
+    async def generate_company_report(
+        ticker: str,
+        pf_path: Annotated[Path, Depends(get_portfolio_path)],
+        container: Annotated[ServiceContainer, Depends(get_container)],
+    ) -> CompanyReport:
+        """Run the LLM narrative call and persist + return the full report."""
+        norm = _norm_ticker(ticker)
+        portfolio, status_obj = await _load_pf_and_status(pf_path, container)
+        try:
+            return await asyncio.to_thread(
+                container.company_report_service.generate_report,
+                portfolio, status_obj, ticker=norm,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        except LLMError as exc:
+            raise HTTPException(status_code=502, detail=f"LLM error: {exc}")
+
+    @app.get(
+        "/api/companies/{ticker}/report.html",
+        response_class=HTMLResponse,
+        tags=["companies"],
+    )
+    async def download_company_report_html(
+        ticker: str,
+        pf_path: Annotated[Path, Depends(get_portfolio_path)],
+        container: Annotated[ServiceContainer, Depends(get_container)],
+    ) -> HTMLResponse:
+        """Standalone HTML download — uses the cached AI report when present,
+        otherwise falls back to the deterministic factsheet (no LLM call)."""
+        import json as _json
+
+        norm = _norm_ticker(ticker)
+        report = await asyncio.to_thread(
+            container.company_report_service.get_cached_report, norm,
+        )
+        if report is None:
+            portfolio, status_obj = await _load_pf_and_status(pf_path, container)
+            try:
+                report = await asyncio.to_thread(
+                    container.company_report_service.build_factsheet,
+                    portfolio, status_obj, ticker=norm,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=404, detail=str(exc))
+
+        template_path = _TEMPLATES_DIR / "company_report.html"
+        if not template_path.is_file():
+            raise HTTPException(
+                status_code=500,
+                detail="Internal: company_report.html template missing.",
+            )
+        template = await asyncio.to_thread(template_path.read_text, "utf-8")
+        payload_json = _json.dumps(
+            report.model_dump(mode="json"), ensure_ascii=False
+        )
+        html = template.replace("__REPORT_DATA_JSON__", payload_json)
+        return HTMLResponse(
+            content=html,
+            headers={
+                "Content-Disposition": (
+                    f'attachment; filename="report_{norm}_'
+                    f'{report.report_date}.html"'
+                ),
+            },
+        )
+
+    @app.get(
+        "/api/companies/upcoming",
+        response_model=list[CalendarItem],
+        tags=["companies"],
+    )
+    async def list_upcoming_reports(
+        pf_path: Annotated[Path, Depends(get_portfolio_path)],
+        container: Annotated[ServiceContainer, Depends(get_container)],
+    ) -> list[CalendarItem]:
+        """Calendar across the whole portfolio (sorted, closest first)."""
+        portfolio = await asyncio.to_thread(load_portfolio, str(pf_path))
+        return await asyncio.to_thread(
+            container.company_report_service.list_upcoming_reports, portfolio,
+        )
 
     # ------------------------------------------------------------ Static frontend
 

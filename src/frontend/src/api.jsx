@@ -100,13 +100,28 @@
       request('POST', '/api/reports', {
         body: { strategy, news_days_back: newsDaysBack, filename },
       }),
+    deleteReport:   (name) => request('DELETE', `/api/reports/${encodeURIComponent(name)}`),
 
-    // Monitoring
+    // Monitoring (legacy bulk — endpoints stay alive but UI no longer calls them)
     runMonitoring:        ({ newsDaysBack = 30 } = {}) =>
       request('POST', '/api/monitoring', { body: { news_days_back: newsDaysBack } }),
     listMonitoringReports: () => request('GET', '/api/monitoring/reports'),
     monitoringReportUrl:   (name) =>
       `${BASE}/api/monitoring/reports/${encodeURIComponent(name)}`,
+    deleteMonitoringReport: (name) =>
+      request('DELETE', `/api/monitoring/reports/${encodeURIComponent(name)}`),
+
+    // Per-company report (new monitoring architecture)
+    getCompanyFactsheet: (ticker) =>
+      request('GET', `/api/companies/${encodeURIComponent(ticker)}/factsheet`),
+    getCachedCompanyReport: (ticker) =>
+      request('GET', `/api/companies/${encodeURIComponent(ticker)}/report`),
+    generateCompanyReport: (ticker) =>
+      request('POST', `/api/companies/${encodeURIComponent(ticker)}/report`),
+    companyReportHtmlUrl: (ticker) =>
+      `${BASE}/api/companies/${encodeURIComponent(ticker)}/report.html`,
+    listUpcomingReports: () =>
+      request('GET', '/api/companies/upcoming'),
   };
 
   window.API = API;
