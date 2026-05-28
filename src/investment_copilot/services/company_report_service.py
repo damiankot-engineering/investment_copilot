@@ -28,7 +28,7 @@ from investment_copilot.domain.company_report import (
     Kpi,
     LabelValue,
 )
-from investment_copilot.domain.fundamentals import FundamentalsSnapshot
+from investment_copilot.domain.fundamentals import DividendEvent, FundamentalsSnapshot
 from investment_copilot.domain.models import NewsItem, normalize_ticker
 from investment_copilot.domain.portfolio import (
     Holding,
@@ -52,11 +52,13 @@ logger = logging.getLogger(__name__)
 
 
 BR_CACHE_TTL: timedelta = timedelta(hours=24)
+DIVIDENDS_CACHE_TTL: timedelta = timedelta(days=7)
 NEWS_DAYS_BACK: int = 30
 NEWS_TOP_N: int = 3
 WEEK52_TRADING_DAYS: int = 252
 FIVE_YEAR_TRADING_DAYS: int = 252 * 5
 REPORT_CACHE_KEY_PREFIX: str = "company_report:"
+DIVIDENDS_CACHE_KEY_PREFIX: str = "biznesradar:dividends:"
 
 
 class CompanyReportService:
@@ -165,25 +167,65 @@ class CompanyReportService:
     ) -> list[CalendarItem]:
         """Calendar across the whole portfolio (sorted, closest first).
 
-        Pulls BR fundamentals from the 24h cache (no extra network if the
-        cache is warm) and emits one CalendarItem per ticker that has an
-        estimated next-report date.
+        Mixes three kinds of events into one chronologically-sorted list:
+
+        * Estimated next-report dates from BR (24h cache).
+        * Upcoming dividend D-day (record date) from BR ``/dywidenda``
+          (7-day cache) — last day a position must be held to qualify.
+        * Upcoming dividend payment date — informational, when the cash
+          hits the brokerage account.
         """
         items: list[tuple[date, CalendarItem]] = []
         for h in portfolio.holdings:
             f = self._fetch_fundamentals_cached(h.ticker)
-            if f is None or f.next_report_estimated_date is None:
-                continue
-            days = (f.next_report_estimated_date - date.today()).days
-            label = self._format_countdown(days)
-            text = f"{h.ticker.upper()} · raport ({label})"
-            items.append((
-                f.next_report_estimated_date,
-                CalendarItem(
-                    highlight=f.next_report_estimated_date.isoformat(),
-                    text=text,
-                ),
-            ))
+            if (
+                f is not None
+                and f.next_report_estimated_date is not None
+                and f.next_report_estimated_date >= date.today()
+            ):
+                days = (f.next_report_estimated_date - date.today()).days
+                items.append((
+                    f.next_report_estimated_date,
+                    CalendarItem(
+                        highlight=f.next_report_estimated_date.isoformat(),
+                        text=(
+                            f"{h.ticker.upper()} · raport "
+                            f"({self._format_countdown(days)})"
+                        ),
+                    ),
+                ))
+            # Upcoming dividend events for this ticker
+            for ev in self._fetch_dividends_cached(h.ticker):
+                if not ev.is_upcoming:
+                    continue
+                amount = (
+                    f" · {ev.amount_per_share:.2f} PLN/akcję"
+                    if ev.amount_per_share is not None else ""
+                )
+                if ev.record_date and ev.record_date >= date.today():
+                    days = (ev.record_date - date.today()).days
+                    items.append((
+                        ev.record_date,
+                        CalendarItem(
+                            highlight=ev.record_date.isoformat(),
+                            text=(
+                                f"{h.ticker.upper()} · D-day dywidendy"
+                                f"{amount} ({self._format_countdown(days)})"
+                            ),
+                        ),
+                    ))
+                if ev.payment_date and ev.payment_date >= date.today():
+                    days = (ev.payment_date - date.today()).days
+                    items.append((
+                        ev.payment_date,
+                        CalendarItem(
+                            highlight=ev.payment_date.isoformat(),
+                            text=(
+                                f"{h.ticker.upper()} · wypłata dywidendy"
+                                f"{amount} ({self._format_countdown(days)})"
+                            ),
+                        ),
+                    ))
         items.sort(key=lambda t: t[0])
         return [it for _, it in items]
 
@@ -221,6 +263,32 @@ class CompanyReportService:
         except Exception as exc:  # pragma: no cover
             logger.warning("Failed to cache BR for %s: %s", ticker, exc)
         return snap
+
+    def _fetch_dividends_cached(self, ticker: str) -> list[DividendEvent]:
+        """Fetch BR dividend events for ``ticker`` with 7-day SQLite cache.
+
+        Returns ``[]`` on any failure (no fundamentals page, network down,
+        parse error) — dividend data is nice-to-have, never load-bearing.
+        """
+        norm = normalize_ticker(ticker)
+        cache_key = DIVIDENDS_CACHE_KEY_PREFIX + norm
+        cached = self._sqlite.cache_get(cache_key, max_age=DIVIDENDS_CACHE_TTL)
+        if cached is not None:
+            try:
+                payload = json.loads(cached)
+                return [DividendEvent.model_validate(p) for p in payload]
+            except (ValueError, KeyError) as exc:
+                logger.warning("Cached BR dividends invalid for %s: %s", ticker, exc)
+
+        events = self._br.fetch_dividends(ticker)
+        try:
+            self._sqlite.cache_set(
+                cache_key,
+                json.dumps([e.model_dump(mode="json") for e in events]),
+            )
+        except Exception as exc:  # pragma: no cover
+            logger.warning("Failed to cache BR dividends for %s: %s", ticker, exc)
+        return events
 
     def _overlay_ohlcv(
         self,

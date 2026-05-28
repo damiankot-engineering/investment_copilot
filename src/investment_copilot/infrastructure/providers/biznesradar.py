@@ -28,7 +28,7 @@ from io import StringIO
 import pandas as pd
 import requests
 
-from investment_copilot.domain.fundamentals import FundamentalsSnapshot
+from investment_copilot.domain.fundamentals import DividendEvent, FundamentalsSnapshot
 from investment_copilot.domain.models import NewsItem, normalize_ticker
 from investment_copilot.infrastructure.providers.base import ProviderError
 
@@ -83,6 +83,22 @@ def _parse_first_number(cell) -> float | None:
     if not m:
         return None
     return _to_float(m.group(1))
+
+
+def _parse_iso_date(raw) -> date | None:
+    """Parse a BR table cell into a date, tolerating '-', '—', NaN."""
+    if raw is None:
+        return None
+    if isinstance(raw, float) and pd.isna(raw):
+        return None
+    s = str(raw).strip()
+    if not s or s in {"-", "—", "nan", "NaN", "None"}:
+        return None
+    # BR uses YYYY-MM-DD; sometimes wrapped with stray whitespace.
+    try:
+        return date.fromisoformat(s[:10])
+    except ValueError:
+        return None
 
 
 def _ticker_to_br_symbol(ticker: str) -> str:
@@ -193,6 +209,32 @@ class BiznesRadarProvider:
         """
         return []
 
+    def fetch_dividends(self, ticker: str) -> list[DividendEvent]:
+        """Scrape ``/dywidenda/{TICKER}`` for the full dividend history + upcoming.
+
+        The page exposes one row per fiscal year with: amount per share,
+        record date, payment date, AGM date and status ('uchwalona' /
+        'wypłacona' / 'propozycja'). Both historical and upcoming entries
+        come back in a single list — the caller filters by ``is_upcoming``
+        when only forward-looking events matter.
+
+        Returns ``[]`` on parse failure (no exception) so callers can
+        degrade gracefully — dividends are nice-to-have, not load-bearing.
+        """
+        symbol = _ticker_to_br_symbol(ticker)
+        norm_ticker = normalize_ticker(ticker)
+        url = f"{_BASE}/dywidenda/{symbol}"
+        try:
+            html = self._fetch_html(url, what="dividends")
+        except ProviderError as exc:
+            logger.info("BR dividends fetch failed for %s: %s", symbol, exc)
+            return []
+        try:
+            return self._parse_dividends_page(html, ticker=norm_ticker)
+        except Exception as exc:  # noqa: BLE001 - any parse failure
+            logger.warning("BR dividends parse failed for %s: %s", symbol, exc)
+            return []
+
     # -- NewsProvider protocol surface (so BR can plug into news pipeline) --
 
     def fetch_news(
@@ -219,6 +261,101 @@ class BiznesRadarProvider:
         except requests.RequestException as exc:
             raise ProviderError(f"BR {what} HTTP error: {exc}") from exc
         return resp.text or ""
+
+    def _parse_dividends_page(
+        self, html: str, *, ticker: str
+    ) -> list[DividendEvent]:
+        """Parse ``/dywidenda/{TICKER}``.
+
+        The dividends table sits first on the page with columns:
+        ``[wypłata za rok, zaliczka, łącznie dyw./akcję, wartość,
+        z kapitału zapasowego, stopa, status, data WZA, ostatnie notowanie
+        z prawem do dywidendy, dzień wypłaty]``. Numeric and date fields
+        come in as Polish strings (commas, '-' for missing) — we coerce
+        defensively and drop any row that lacks BOTH amount and dates.
+        """
+        if not html:
+            return []
+        try:
+            tables = pd.read_html(StringIO(html), encoding="utf-8")
+        except ValueError:
+            return []
+
+        # Find the dividends table by header signature
+        target = None
+        for t in tables:
+            cols = [str(c).lower() for c in t.columns]
+            joined = " ".join(cols)
+            if (
+                "wypłata za rok" in joined
+                and "dzień wypłaty" in joined
+                and "status" in joined
+            ):
+                target = t
+                break
+        if target is None:
+            return []
+
+        # Build a column-name → index map so we tolerate column reordering.
+        col_idx: dict[str, int] = {}
+        for i, c in enumerate(target.columns):
+            cl = str(c).lower().strip()
+            if "wypłata za rok" in cl:
+                col_idx["fiscal_year"] = i
+            elif "dywidenda na akcję" in cl or "dywidenda na akcje" in cl:
+                col_idx["amount"] = i
+            elif "status" in cl and len(cl) < 20:
+                col_idx["status"] = i
+            elif "data wza" in cl:
+                col_idx["agm"] = i
+            elif "prawem do dywidendy" in cl:
+                col_idx["record"] = i
+            elif "dzień wypłaty" in cl or "dzien wyplaty" in cl:
+                col_idx["payment"] = i
+
+        events: list[DividendEvent] = []
+        for _, row in target.iterrows():
+            try:
+                fy_str = str(row.iloc[col_idx["fiscal_year"]]).strip()
+                fy = int(fy_str[:4]) if fy_str[:4].isdigit() else None
+            except (KeyError, ValueError):
+                fy = None
+            if fy is None:
+                continue
+
+            amount = _to_float(
+                row.iloc[col_idx["amount"]]
+            ) if "amount" in col_idx else None
+            status = (
+                str(row.iloc[col_idx["status"]]).strip()
+                if "status" in col_idx else ""
+            )
+            if status.lower() in {"nan", "none"}:
+                status = ""
+
+            agm = _parse_iso_date(
+                row.iloc[col_idx["agm"]]
+            ) if "agm" in col_idx else None
+            record = _parse_iso_date(
+                row.iloc[col_idx["record"]]
+            ) if "record" in col_idx else None
+            payment = _parse_iso_date(
+                row.iloc[col_idx["payment"]]
+            ) if "payment" in col_idx else None
+
+            if amount is None and record is None and payment is None:
+                continue  # nothing to surface
+
+            events.append(DividendEvent(
+                ticker=ticker,
+                fiscal_year=fy,
+                amount_per_share=amount,
+                record_date=record,
+                payment_date=payment,
+                agm_date=agm,
+                status=status,
+            ))
+        return events
 
     def _parse_pnl_page(self, html: str) -> dict:
         """Parse the quarterly P&L page.

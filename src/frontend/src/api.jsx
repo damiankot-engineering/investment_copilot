@@ -73,6 +73,37 @@
     // Data
     updateData:    (newsDaysBack = 14) =>
       request('POST', '/api/data/update', { query: { news_days_back: newsDaysBack } }),
+    streamUpdateData: ({ newsDaysBack = 14, onEvent } = {}) => {
+      // EventSource only does GET; the streaming endpoint mirrors POST's
+      // side effects but uses GET for SSE compatibility.
+      const url = new URL(`${BASE}/api/data/update/stream`, window.location.origin);
+      url.searchParams.set('news_days_back', String(newsDaysBack));
+      const es = new EventSource(url.toString());
+      let settled = false;
+      const result = new Promise((resolve, reject) => {
+        es.onmessage = (msg) => {
+          let ev;
+          try { ev = JSON.parse(msg.data); } catch (_) { return; }
+          if (onEvent) onEvent(ev);
+          if (ev.type === 'done') {
+            settled = true;
+            es.close();
+            resolve(ev);
+          } else if (ev.type === 'error') {
+            settled = true;
+            es.close();
+            reject(new ApiError(ev.message || 'stream error', 0, ev.message));
+          }
+        };
+        es.onerror = () => {
+          if (settled) return;
+          es.close();
+          reject(new ApiError('SSE connection lost', 0, null));
+        };
+      });
+      result.close = () => es.close();
+      return result;
+    },
 
     // Backtest
     runBacktest:   (strategy = 'ma_crossover', { startDate, endDate, includeBenchmark = true, benchmark } = {}) =>
@@ -91,6 +122,7 @@
       request('POST', '/api/analysis', {
         query: { include_risks: includeRisks, news_days_back: newsDaysBack },
       }),
+    getCachedAnalysis: () => request('GET', '/api/analysis/cached'),
 
     // Reports
     listReports:    () => request('GET', '/api/reports'),

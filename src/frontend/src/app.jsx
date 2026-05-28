@@ -59,6 +59,7 @@ function App() {
   const [portfolio, setPortfolio] = React.useState(MOCK_PORTFOLIO);
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
+  const [refreshProgress, setRefreshProgress] = React.useState(null);
   const [appConfig, setAppConfig] = React.useState({ benchmark: 'wig20', benchmark_label: 'WIG20' });
   const toast = useToast();
 
@@ -90,8 +91,37 @@ function App() {
 
   const onRefresh = async () => {
     setRefreshing(true);
+    setRefreshProgress({ label: 'Łączenie…', pct: 0 });
     try {
-      const result = await window.API.updateData(14);
+      let ohlcvTotal = 0;
+      let ohlcvDone = 0;
+      const result = await window.API.streamUpdateData({
+        newsDaysBack: 14,
+        onEvent: (ev) => {
+          if (ev.type === 'stage' && ev.status === 'start' && ev.name === 'ohlcv') {
+            ohlcvTotal = ev.total || 0;
+            setRefreshProgress({ label: 'Pobieranie OHLCV…', pct: 0 });
+          } else if (ev.type === 'ohlcv_tick') {
+            ohlcvDone = ev.idx;
+            const pct = ohlcvTotal ? Math.round((ohlcvDone / ohlcvTotal) * 60) : 0; // OHLCV = 0-60%
+            setRefreshProgress({
+              label: `OHLCV ${ev.ticker} (${ev.idx}/${ev.total})${ev.status === 'failed' ? ' — błąd' : ''}`,
+              pct,
+            });
+          } else if (ev.type === 'stage' && ev.name === 'benchmark') {
+            setRefreshProgress({
+              label: ev.status === 'start' ? 'Pobieranie benchmarka…' : `Benchmark: ${ev.rows} rzędów`,
+              pct: ev.status === 'start' ? 65 : 75,
+            });
+          } else if (ev.type === 'stage' && ev.name === 'news') {
+            setRefreshProgress({
+              label: ev.status === 'start' ? 'Pobieranie newsów…' : `Newsy: ${ev.inserted} nowych`,
+              pct: ev.status === 'start' ? 80 : 95,
+            });
+          }
+        },
+      });
+      setRefreshProgress({ label: 'Gotowe', pct: 100 });
       const failed = Object.keys(result.ohlcv_failed || {}).length;
       await loadStatus();
       toast.success(
@@ -103,6 +133,7 @@ function App() {
       toast.error('Aktualizacja nie powiodła się', err.detail || err.message);
     } finally {
       setRefreshing(false);
+      setTimeout(() => setRefreshProgress(null), 1200);  // briefly show "Gotowe"
     }
   };
 
@@ -132,7 +163,7 @@ function App() {
   // its own state (backtest results, AI analysis, monitoring snapshot, etc.)
   // across tab switches. Only the entrance animation runs once per tab.
   const tabs = [
-    { id: 'portfolio',  node: <PortfolioTab portfolio={portfolio} onUpdatePortfolio={onUpdatePortfolio} onRefresh={onRefresh} refreshing={refreshing} benchmarkLabel={appConfig.benchmark_label} /> },
+    { id: 'portfolio',  node: <PortfolioTab portfolio={portfolio} onUpdatePortfolio={onUpdatePortfolio} onRefresh={onRefresh} refreshing={refreshing} refreshProgress={refreshProgress} benchmarkLabel={appConfig.benchmark_label} /> },
     { id: 'watchlist',  node: <WatchlistTab /> },
     { id: 'backtest',   node: <BacktestTab /> },
     { id: 'analysis',   node: <AnalysisTab /> },

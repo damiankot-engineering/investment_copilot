@@ -14,15 +14,22 @@ in dev for ``http://localhost:5173`` and ``http://localhost:8000``.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 import re
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    PlainTextResponse,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 
 from investment_copilot import __version__
@@ -81,6 +88,23 @@ _FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
 _TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 
 _SAFE_FILENAME = re.compile(r"^[A-Za-z0-9._-]+$")
+
+# Long TTL — analysis cache is invalidated manually (on update-data) rather
+# than by time. 365 days makes it effectively persistent.
+_ANALYSIS_CACHE_TTL = timedelta(days=365)
+
+
+def _analysis_cache_key(portfolio: Portfolio) -> str:
+    """Stable cache key tied to portfolio content.
+
+    Any change to the portfolio YAML (ticker, shares, thesis, ...) yields a
+    different hash, so a stale entry from a previous portfolio shape never
+    surfaces. The first 16 hex chars are plenty of entropy for a single-user
+    local cache and keep the key short.
+    """
+    payload = portfolio.model_dump_json()
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+    return f"analysis:{digest}"
 
 
 def _check_filename(name: str) -> None:
@@ -328,6 +352,7 @@ def create_app() -> FastAPI:
         pf_path: Annotated[Path, Depends(get_portfolio_path)],
         wl_path: Annotated[Path, Depends(get_watchlist_path)],
         orch: Annotated[Orchestrator, Depends(get_orchestrator)],
+        container: Annotated[ServiceContainer, Depends(get_container)],
         news_days_back: int = 14,
     ) -> DataUpdateResult:
         portfolio = await asyncio.to_thread(load_portfolio, str(pf_path))
@@ -342,6 +367,12 @@ def create_app() -> FastAPI:
             news_days_back=news_days_back,
             watchlist=watchlist,
         )
+        # Fresh OHLCV + news = stale cached analysis. Drop it so the next
+        # GET /api/analysis/cached returns null and the UI prompts a regen.
+        try:
+            container.sqlite_store.cache_delete(_analysis_cache_key(portfolio))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to invalidate analysis cache: %s", exc)
         return DataUpdateResult(
             ohlcv_updated=dict(report.ohlcv_updated),
             ohlcv_failed=dict(report.ohlcv_failed),
@@ -349,6 +380,90 @@ def create_app() -> FastAPI:
             benchmark_rows=report.benchmark_rows,
             news_inserted=report.news_inserted,
             news_failed=list(report.news_failed),
+        )
+
+    @app.get(
+        "/api/data/update/stream",
+        tags=["data"],
+    )
+    async def update_data_stream(
+        pf_path: Annotated[Path, Depends(get_portfolio_path)],
+        wl_path: Annotated[Path, Depends(get_watchlist_path)],
+        orch: Annotated[Orchestrator, Depends(get_orchestrator)],
+        container: Annotated[ServiceContainer, Depends(get_container)],
+        news_days_back: int = 14,
+    ) -> StreamingResponse:
+        """SSE variant of POST /api/data/update — emits per-ticker + per-stage progress.
+
+        Same side effects as the POST variant (OHLCV / benchmark / news
+        refresh, analysis-cache invalidation). EventSource-friendly: GET
+        method, ``text/event-stream`` media, one JSON event per ``data:``
+        line. The final ``done`` event carries the same shape as
+        ``DataUpdateResult`` so the UI can update its summary chips.
+        """
+        portfolio = await asyncio.to_thread(load_portfolio, str(pf_path))
+        try:
+            watchlist = await asyncio.to_thread(load_watchlist, str(wl_path))
+        except WatchlistError:
+            watchlist = None
+
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue[dict | None] = asyncio.Queue()
+
+        def emit(event: dict) -> None:
+            # Called from the worker thread; hand off to the event loop.
+            loop.call_soon_threadsafe(queue.put_nowait, event)
+
+        async def runner() -> None:
+            try:
+                report = await asyncio.to_thread(
+                    orch.update_data,
+                    portfolio,
+                    news_days_back=news_days_back,
+                    watchlist=watchlist,
+                    on_progress=emit,
+                )
+                # Invalidate analysis cache exactly like the POST endpoint does
+                try:
+                    container.sqlite_store.cache_delete(
+                        _analysis_cache_key(portfolio)
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "Failed to invalidate analysis cache: %s", exc
+                    )
+                emit({
+                    "type": "done",
+                    "ohlcv_updated": dict(report.ohlcv_updated),
+                    "ohlcv_failed": dict(report.ohlcv_failed),
+                    "benchmark_symbol": report.benchmark_symbol,
+                    "benchmark_rows": report.benchmark_rows,
+                    "news_inserted": report.news_inserted,
+                    "news_failed": list(report.news_failed),
+                })
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("update_data/stream worker failed")
+                emit({"type": "error", "message": f"{type(exc).__name__}: {exc}"})
+            finally:
+                # Sentinel — tells the generator to close cleanly.
+                loop.call_soon_threadsafe(queue.put_nowait, None)
+
+        asyncio.create_task(runner())
+
+        async def event_stream():
+            while True:
+                ev = await queue.get()
+                if ev is None:
+                    break
+                yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",  # disable nginx buffering if proxied
+            },
         )
 
     # ---------------------------------------------------------------- Backtest
@@ -422,9 +537,47 @@ def create_app() -> FastAPI:
             bundle.status,
             container,
         )
-        return adapters.analysis_bundle_to_dto(
+        dto = adapters.analysis_bundle_to_dto(
             bundle, portfolio=portfolio, metrics=metrics
         )
+        # Persist the rendered DTO so the UI can show it on next page load
+        # without spending tokens again. Invalidated by POST /api/data/update.
+        try:
+            container.sqlite_store.cache_set(
+                _analysis_cache_key(portfolio),
+                dto.model_dump_json(),
+            )
+        except Exception as exc:  # noqa: BLE001 - caching is best-effort
+            logger.warning("Failed to cache analysis bundle: %s", exc)
+        return dto
+
+    @app.get(
+        "/api/analysis/cached",
+        response_model=AnalysisBundleDTO | None,
+        tags=["analysis"],
+    )
+    async def get_cached_analysis(
+        pf_path: Annotated[Path, Depends(get_portfolio_path)],
+        container: Annotated[ServiceContainer, Depends(get_container)],
+    ) -> AnalysisBundleDTO | None:
+        """Return the most recently persisted analysis for the current portfolio.
+
+        Cache hits when the portfolio YAML is unchanged AND no
+        ``POST /api/data/update`` has run since. Returns ``null`` otherwise
+        so the UI can prompt the user to click ``Regeneruj``.
+        """
+        portfolio = await asyncio.to_thread(load_portfolio, str(pf_path))
+        key = _analysis_cache_key(portfolio)
+        payload = await asyncio.to_thread(
+            container.sqlite_store.cache_get, key, max_age=_ANALYSIS_CACHE_TTL,
+        )
+        if payload is None:
+            return None
+        try:
+            return AnalysisBundleDTO.model_validate_json(payload)
+        except ValueError as exc:
+            logger.warning("Cached analysis payload invalid: %s", exc)
+            return None
 
     # ----------------------------------------------------------------- Reports
 

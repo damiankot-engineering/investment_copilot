@@ -108,6 +108,55 @@ class EarningsCalendarEntry(BaseModel):
     source: str = "llm"
 
 
+class DividendEvent(BaseModel):
+    """A single dividend payment for a company.
+
+    Scraped from BiznesRadar's ``/dywidenda/{TICKER}`` table. Each row in
+    that table is one fiscal year; the dataset covers both historical
+    (``status="wypłacona"``) and upcoming (``status="uchwalona"`` or
+    ``"propozycja"``) dividends. Surface upcoming ones in the monitoring
+    calendar.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    ticker: str
+    fiscal_year: int = Field(
+        description="The fiscal year the dividend is paid FOR (not the payout year).",
+    )
+    amount_per_share: float | None = Field(
+        default=None,
+        description="PLN per share (None when only an estimate is announced).",
+    )
+    record_date: date | None = Field(
+        default=None,
+        description=(
+            "Ex-dividend / record date — last day a position must be held "
+            "to qualify (BR: 'ostatnie notowanie z prawem do dywidendy')."
+        ),
+    )
+    payment_date: date | None = Field(
+        default=None,
+        description="When the dividend hits the account (BR: 'dzień wypłaty').",
+    )
+    agm_date: date | None = Field(
+        default=None,
+        description="AGM approval date (BR: 'data WZA').",
+    )
+    status: str = Field(
+        default="",
+        description=(
+            "BR status label — 'uchwalona' (approved, upcoming), "
+            "'wypłacona' (paid out), 'propozycja' (proposal), '' (unknown)."
+        ),
+    )
+
+    @property
+    def is_upcoming(self) -> bool:
+        """True when the payment date is in the future."""
+        return self.payment_date is not None and self.payment_date >= date.today()
+
+
 class TickerNewsRef(BaseModel):
     """Compact news reference stored in the monitoring snapshot for diffing."""
 

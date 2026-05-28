@@ -23,6 +23,7 @@ from __future__ import annotations
 import logging
 from datetime import date, datetime, timezone
 from pathlib import Path
+from typing import Callable
 
 from investment_copilot.domain.backtest import BacktestError, BacktestResult
 from investment_copilot.domain.portfolio import Portfolio
@@ -63,6 +64,7 @@ class Orchestrator:
         end: date | None = None,
         news_days_back: int = 14,
         watchlist: Watchlist | None = None,
+        on_progress: "Callable[[dict], None] | None" = None,
     ) -> RefreshReport:
         """Refresh OHLCV (per holding + benchmark + watchlist) and news caches.
 
@@ -70,7 +72,13 @@ class Orchestrator:
         refresh and its keywords merged into the per-ticker news map, so the
         Watchlist tab can show live prices and news cards just like Portfolio.
         Portfolio keywords win on duplicate tickers.
+
+        ``on_progress``, when supplied, receives stage events as the pipeline
+        progresses — ``{"type": "stage", "name": ..., "status": "start"|"done"}``
+        plus per-ticker events forwarded from
+        :meth:`DataService.refresh_ohlcv`. Used by the SSE update endpoint.
         """
+        emit = on_progress or (lambda _ev: None)
         cfg = self._container.config
         data = self._container.data_service
         start_date = start or cfg.backtest.start_date
@@ -83,17 +91,24 @@ class Orchestrator:
                     all_tickers.append(t)
 
         # OHLCV per ticker (DataService.refresh_ohlcv handles per-ticker errors)
+        emit({"type": "stage", "name": "ohlcv", "status": "start",
+              "total": len(all_tickers)})
         try:
             updated = data.refresh_ohlcv(
-                all_tickers, start=start_date, end=end
+                all_tickers, start=start_date, end=end,
+                on_progress=emit,
             )
             report.ohlcv_updated.update(updated)
         except Exception as exc:  # provider-level catastrophic failure
             logger.exception("update_data: OHLCV refresh aborted")
             for t in all_tickers:
                 report.ohlcv_failed.setdefault(t, str(exc))
+        emit({"type": "stage", "name": "ohlcv", "status": "done",
+              "ok": len(report.ohlcv_updated), "failed": len(report.ohlcv_failed)})
 
         # Benchmark
+        emit({"type": "stage", "name": "benchmark", "status": "start",
+              "symbol": cfg.backtest.benchmark})
         try:
             symbol, rows = data.refresh_benchmark(
                 cfg.backtest.benchmark, start=start_date, end=end
@@ -103,8 +118,11 @@ class Orchestrator:
         except Exception as exc:
             logger.warning("update_data: benchmark refresh failed: %s", exc)
             report.news_failed.append(f"benchmark: {exc}")
+        emit({"type": "stage", "name": "benchmark", "status": "done",
+              "symbol": report.benchmark_symbol, "rows": report.benchmark_rows})
 
         # News (portfolio + watchlist keywords merged; portfolio wins on dupes)
+        emit({"type": "stage", "name": "news", "status": "start"})
         try:
             since = datetime.now(timezone.utc).replace(
                 tzinfo=timezone.utc
@@ -122,6 +140,8 @@ class Orchestrator:
         except Exception as exc:
             logger.warning("update_data: news refresh failed: %s", exc)
             report.news_failed.append(f"news: {exc}")
+        emit({"type": "stage", "name": "news", "status": "done",
+              "inserted": report.news_inserted})
 
         return report
 

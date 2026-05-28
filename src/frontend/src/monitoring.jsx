@@ -32,7 +32,7 @@ function UpcomingReports({ items, loading }) {
       <Card className="px-4 py-3.5 text-[12.5px] text-white/55">
         <div className="flex items-center gap-2">
           <Icon name="calendar" size={13} className="text-white/40" />
-          <span>Brak nadchodzących raportów w cache BR. Odśwież dane.</span>
+          <span>Brak nadchodzących wydarzeń w cache BR. Odśwież dane.</span>
         </div>
       </Card>
     );
@@ -41,8 +41,9 @@ function UpcomingReports({ items, loading }) {
     <Card className="px-4 py-3 overflow-hidden">
       <div className="flex items-center gap-2 mb-2.5 px-1">
         <Icon name="calendar" size={13} className="text-accent-violet" />
-        <span className="text-[12.5px] font-medium text-white">Najbliższe raporty</span>
+        <span className="text-[12.5px] font-medium text-white">Najbliższe wydarzenia</span>
         <span className="mono text-[11px] text-white/35 ml-1">{items.length}</span>
+        <span className="text-[10.5px] text-white/35 ml-2">raporty kwartalne · dywidendy</span>
       </div>
       <div className="flex flex-col">
         {items.slice(0, 8).map((it, i) => (

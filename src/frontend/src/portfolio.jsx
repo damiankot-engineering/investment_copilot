@@ -339,23 +339,47 @@ function EditPortfolioDialog({ open, onClose, holdings, onSave }) {
 }
 
 /* ---------- Update progress shimmer ---------- */
-function UpdateProgressBar({ active }) {
+function UpdateProgressBar({ active, progress }) {
+  // Determinate when SSE supplies progress {label, pct}; otherwise the
+  // legacy shimmer placeholder stays in place.
+  const determinate = progress && typeof progress.pct === 'number';
   return (
     <PAP>
-      {active && (
+      {(active || progress) && (
         <PMot.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          className="relative h-1 rounded-full overflow-hidden bg-white/[0.04]"
+          className="flex flex-col gap-1.5"
         >
-          <div className="absolute inset-0 bg-gradient-to-r from-accent-cyan to-accent-violet opacity-30" />
-          <PMot.div
-            className="absolute top-0 bottom-0 w-1/3 bg-gradient-to-r from-accent-cyan to-accent-violet"
-            initial={{ x: '-100%' }}
-            animate={{ x: '300%' }}
-            transition={{ repeat: Infinity, duration: 1.4, ease: 'easeInOut' }}
-          />
+          <div className="relative h-1 rounded-full overflow-hidden bg-white/[0.04]">
+            {determinate ? (
+              <PMot.div
+                className="absolute top-0 bottom-0 left-0 bg-gradient-to-r from-accent-cyan to-accent-violet"
+                initial={{ width: 0 }}
+                animate={{ width: `${Math.max(0, Math.min(100, progress.pct))}%` }}
+                transition={{ duration: 0.35, ease: 'easeOut' }}
+              />
+            ) : (
+              <>
+                <div className="absolute inset-0 bg-gradient-to-r from-accent-cyan to-accent-violet opacity-30" />
+                <PMot.div
+                  className="absolute top-0 bottom-0 w-1/3 bg-gradient-to-r from-accent-cyan to-accent-violet"
+                  initial={{ x: '-100%' }}
+                  animate={{ x: '300%' }}
+                  transition={{ repeat: Infinity, duration: 1.4, ease: 'easeInOut' }}
+                />
+              </>
+            )}
+          </div>
+          {progress && progress.label && (
+            <div className="flex items-center justify-between text-[11px] text-white/55">
+              <span className="mono truncate">{progress.label}</span>
+              {determinate && (
+                <span className="mono text-white/40 ml-2">{progress.pct}%</span>
+              )}
+            </div>
+          )}
         </PMot.div>
       )}
     </PAP>
@@ -363,7 +387,7 @@ function UpdateProgressBar({ active }) {
 }
 
 /* ---------- Portfolio Tab ---------- */
-function PortfolioTab({ portfolio, onUpdatePortfolio, onRefresh, refreshing, benchmarkLabel = 'WIG20' }) {
+function PortfolioTab({ portfolio, onUpdatePortfolio, onRefresh, refreshing, refreshProgress, benchmarkLabel = 'WIG20' }) {
   const [editOpen, setEditOpen] = React.useState(false);
   const toast = useToast();
 
@@ -385,7 +409,7 @@ function PortfolioTab({ portfolio, onUpdatePortfolio, onRefresh, refreshing, ben
         }
       />
 
-      <UpdateProgressBar active={refreshing} />
+      <UpdateProgressBar active={refreshing} progress={refreshProgress} />
 
       {/* KPI row */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">

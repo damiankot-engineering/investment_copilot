@@ -253,20 +253,48 @@ function QuantMetricsSection({ metrics }) {
 function AnalysisTab() {
   const [loading, setLoading] = React.useState(false);
   const [data, setData] = React.useState(null);
+  const [generatedAt, setGeneratedAt] = React.useState(null);
+  const [fromCache, setFromCache] = React.useState(false);
+  const [loadingCached, setLoadingCached] = React.useState(true);
   const toast = useToast();
+
+  const ingestBundle = (bundle, { cached }) => {
+    setData({
+      summary: bundle.analysis,
+      alerts: bundle.alerts || [],
+      risk_overview: bundle.risk_overview,
+      metrics: bundle.metrics,
+      warnings: bundle.warnings || [],
+    });
+    setGeneratedAt(bundle.generated_at || null);
+    setFromCache(cached);
+  };
+
+  // Try to show the previously persisted bundle without spending tokens.
+  React.useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const cached = await window.API.getCachedAnalysis();
+        if (cancelled) return;
+        if (cached) ingestBundle(cached, { cached: true });
+      } catch (err) {
+        console.error('Cached analysis load failed:', err);
+      } finally {
+        if (!cancelled) setLoadingCached(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   const runAnalysis = async () => {
     setLoading(true);
     setData(null);
+    setGeneratedAt(null);
+    setFromCache(false);
     try {
       const bundle = await window.API.runAnalysis();
-      setData({
-        summary: bundle.analysis,           // { summary_md, thesis_updates, confidence } or null
-        alerts: bundle.alerts || [],
-        risk_overview: bundle.risk_overview,
-        metrics: bundle.metrics,            // PortfolioMetricsDTO or null
-        warnings: bundle.warnings || [],
-      });
+      ingestBundle(bundle, { cached: false });
       if (bundle.analysis) {
         toast.success('Analiza gotowa', 'Wygenerowano podsumowanie i alerty.');
       } else if (bundle.warnings && bundle.warnings.length) {
@@ -280,6 +308,11 @@ function AnalysisTab() {
     }
   };
 
+  const onRegenerate = async () => {
+    if (!window.confirm('Wygenerować nową analizę? Cached zostanie nadpisany.')) return;
+    await runAnalysis();
+  };
+
   const severityCounts = data ? data.alerts.reduce((a, x) => ({ ...a, [x.severity]: (a[x.severity] || 0) + 1 }), {}) : {};
 
   return (
@@ -290,13 +323,31 @@ function AnalysisTab() {
         description="Podsumowanie portfela, ocena tez i alerty ryzyka generowane przez model językowy."
         right={
           <div className="flex items-center gap-2">
-            <Button variant="outline" icon="settings">Konfiguracja modelu</Button>
-            <Button variant="primary" icon="sparkles" loading={loading} onClick={runAnalysis}>
-              Uruchom analizę
-            </Button>
+            {data ? (
+              <Button variant="primary" icon="refresh" loading={loading} onClick={onRegenerate}>
+                Regeneruj analizę
+              </Button>
+            ) : (
+              <Button variant="primary" icon="sparkles" loading={loading} onClick={runAnalysis}>
+                Uruchom analizę
+              </Button>
+            )}
           </div>
         }
       />
+
+      {fromCache && generatedAt && (
+        <div className="flex items-center gap-2 -mt-2 text-[11.5px] text-white/55">
+          <Icon name="clock" size={12} className="text-white/40" />
+          <span>
+            Wczytano z cache · wygenerowano {fmtRelTime(generatedAt)} ·{' '}
+            <span className="mono text-white/70">{fmtDateTime(generatedAt)}</span>
+          </span>
+          <span className="text-white/30 ml-1">
+            (cache jest invalidowany po Aktualizuj dane)
+          </span>
+        </div>
+      )}
 
       {/* Severity strip */}
       {data && (

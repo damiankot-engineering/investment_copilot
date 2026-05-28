@@ -198,6 +198,12 @@ class SQLiteStore:
                 (key, payload_json, _to_iso(datetime.now(timezone.utc))),
             )
 
+    def cache_delete(self, key: str) -> bool:
+        """Remove ``key`` from the kv cache. Returns ``True`` if a row was deleted."""
+        with self._connect() as conn:
+            cur = conn.execute("DELETE FROM kv_cache WHERE cache_key = ?", (key,))
+            return (cur.rowcount or 0) > 0
+
     def cache_get(self, key: str, *, max_age: timedelta) -> str | None:
         """Return the cached payload for ``key`` if fresher than ``max_age``."""
         with self._connect() as conn:

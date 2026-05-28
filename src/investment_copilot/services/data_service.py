@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
-from typing import Mapping, Sequence
+from typing import Callable, Mapping, Sequence
 
 import pandas as pd
 
@@ -69,19 +69,31 @@ class DataService:
         *,
         start: date,
         end: date | None = None,
+        on_progress: "Callable[[dict], None] | None" = None,
     ) -> dict[str, int]:
         """Fetch OHLCV for each ticker and upsert into the parquet cache.
 
         Returns a map ``symbol -> rows_after_merge`` for successfully fetched
         symbols. Failures are logged and recorded but don't abort the run.
+
+        If ``on_progress`` is supplied it is invoked once per ticker with
+        ``{"type": "ohlcv_tick", "ticker", "idx", "total", "status", "rows"?,
+        "error"?}`` so a streaming caller can surface live progress.
         """
         results: dict[str, int] = {}
-        for ticker in tickers:
+        total = len(tickers)
+        for idx, ticker in enumerate(tickers, start=1):
             symbol = normalize_ticker(ticker)
             try:
                 df = self._market.fetch_ohlcv(symbol, start=start, end=end)
             except ProviderError as exc:
                 logger.warning("OHLCV fetch failed for %s: %s", symbol, exc)
+                if on_progress is not None:
+                    on_progress({
+                        "type": "ohlcv_tick", "ticker": symbol,
+                        "idx": idx, "total": total,
+                        "status": "failed", "error": str(exc),
+                    })
                 continue
             merged = self._parquet.upsert(symbol, df)
             self._sqlite.set_ohlcv_meta(
@@ -92,6 +104,12 @@ class DataService:
             )
             results[symbol] = len(merged)
             logger.info("OHLCV refreshed: %s (%d rows)", symbol, len(merged))
+            if on_progress is not None:
+                on_progress({
+                    "type": "ohlcv_tick", "ticker": symbol,
+                    "idx": idx, "total": total,
+                    "status": "ok", "rows": len(merged),
+                })
         return results
 
     def refresh_benchmark(
