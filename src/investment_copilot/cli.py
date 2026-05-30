@@ -415,18 +415,24 @@ _STARTER_PORTFOLIO = """\
 #
 # Tickers use Stooq convention (lowercase + ".pl"). Variants like
 # "PKN" or "PKN.WA" are normalized automatically.
+#
+# Each holding is a list of BUY/SELL transactions. Shares, FIFO cost basis,
+# average entry price and realized PnL are all derived from this list.
 
 base_currency: PLN
 
 holdings:
   - ticker: pkn.pl
     name: PKN Orlen
-    shares: 100
-    entry_price: 65.40
-    entry_date: 2023-04-12
     keywords: [Orlen, PKN]
     thesis: |
       Replace this with your real investment thesis.
+    transactions:
+      - date: 2023-04-12
+        action: BUY
+        shares: 100
+        price_per_share: 65.40
+      # Add more transactions (BUY/SELL, with optional `fees` and `note`).
 
   # Add more holdings below, or remove the example above and start from scratch.
 """

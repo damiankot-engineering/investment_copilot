@@ -24,6 +24,7 @@ from investment_copilot.api.schemas import (
     PortfolioStatusDTO,
     RiskAlertDTO,
     ThesisUpdateDTO,
+    TransactionDTO,
     WatchlistDTO,
     WatchlistItemDTO,
     WatchlistItemStatusDTO,
@@ -70,10 +71,22 @@ def holding_to_dto(h: Holding) -> HoldingDTO:
         display_ticker=display_ticker(h.ticker),
         name=h.name,
         shares=h.shares,
-        entry_price=h.entry_price,
-        entry_date=h.entry_date,
+        entry_price=h.avg_entry_price,
+        entry_date=h.first_entry_date,
         thesis=h.thesis,
         keywords=list(h.keywords),
+        transactions=[
+            TransactionDTO(
+                date=tx.date,
+                action=tx.action,
+                shares=tx.shares,
+                price_per_share=tx.price_per_share,
+                fees=tx.fees,
+                note=tx.note,
+            )
+            for tx in h.transactions
+        ],
+        realized_pnl=h.realized_pnl,
     )
 
 
@@ -87,6 +100,9 @@ def holding_status_to_dto(s: HoldingStatus) -> HoldingStatusDTO:
         entry_date=s.entry_date,
         thesis="",  # not present on HoldingStatus; UI does not need it here
         keywords=[],
+        transactions=[],  # not loaded here; portfolio endpoint surfaces them
+        realized_pnl=s.realized_pnl,
+        n_transactions=s.n_transactions,
         last_price=s.last_price,
         last_price_date=s.last_price_date,
         value=s.market_value,
@@ -111,18 +127,36 @@ def portfolio_status_to_dto(
     """Build the wire-format status; enrich with thesis/keywords if a
     matching :class:`Portfolio` is provided (the status itself drops them).
     """
-    thesis_by_ticker: dict[str, tuple[str, list[str]]] = {}
+    thesis_by_ticker: dict[str, tuple[str, list[str], list[TransactionDTO]]] = {}
     if portfolio is not None:
         thesis_by_ticker = {
-            h.ticker: (h.thesis, list(h.keywords)) for h in portfolio.holdings
+            h.ticker: (
+                h.thesis,
+                list(h.keywords),
+                [
+                    TransactionDTO(
+                        date=tx.date,
+                        action=tx.action,
+                        shares=tx.shares,
+                        price_per_share=tx.price_per_share,
+                        fees=tx.fees,
+                        note=tx.note,
+                    )
+                    for tx in h.transactions
+                ],
+            )
+            for h in portfolio.holdings
         }
 
     holdings: list[HoldingStatusDTO] = []
     for s in status.holdings:
         dto = holding_status_to_dto(s)
         if s.ticker in thesis_by_ticker:
-            thesis, keywords = thesis_by_ticker[s.ticker]
-            dto = dto.model_copy(update={"thesis": thesis, "keywords": keywords})
+            thesis, keywords, transactions = thesis_by_ticker[s.ticker]
+            dto = dto.model_copy(update={
+                "thesis": thesis, "keywords": keywords,
+                "transactions": transactions,
+            })
         holdings.append(dto)
 
     return PortfolioStatusDTO(
@@ -132,6 +166,7 @@ def portfolio_status_to_dto(
         total_pnl=status.total_unrealized_pnl,
         total_pnl_pct=status.total_unrealized_pnl_pct * 100.0,
         total_cost_basis=status.total_cost_basis,
+        total_realized_pnl=status.total_realized_pnl,
         missing_data=list(status.missing_data),
         as_of=status.as_of,
     )

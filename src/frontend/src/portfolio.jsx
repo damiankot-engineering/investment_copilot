@@ -238,22 +238,145 @@ function HoldingsTable({ portfolio }) {
 }
 
 /* ---------- Edit Portfolio Dialog ---------- */
+// FIFO summary used by the edit dialog so the user can sanity-check the
+// computed shares/avg-cost without round-tripping to the backend.
+function summarizeTransactions(txs) {
+  if (!Array.isArray(txs) || txs.length === 0) return { shares: 0, avg: 0, cost_basis: 0, valid: true, error: null };
+  const sorted = [...txs].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+  let lots = [];
+  let realized = 0;
+  for (const tx of sorted) {
+    const sh = Number(tx.shares) || 0;
+    const px = Number(tx.price_per_share) || 0;
+    const fees = Number(tx.fees) || 0;
+    if (sh <= 0 || px <= 0) {
+      return { shares: 0, avg: 0, cost_basis: 0, valid: false, error: 'Akcje i cena muszą być > 0' };
+    }
+    if (tx.action === 'BUY') {
+      const perShareBasis = px + fees / sh;
+      lots.push({ shares: sh, perShareBasis });
+    } else {
+      let remaining = sh;
+      while (remaining > 1e-9 && lots.length > 0) {
+        const lot = lots[0];
+        const take = Math.min(lot.shares, remaining);
+        realized += (px - lot.perShareBasis) * take;
+        lot.shares -= take;
+        remaining -= take;
+        if (lot.shares <= 1e-9) lots.shift();
+      }
+      realized -= fees;
+      if (remaining > 1e-9) {
+        return { shares: 0, avg: 0, cost_basis: 0, valid: false, error: `SELL ${tx.date} przewyższa stan` };
+      }
+    }
+  }
+  const shares = lots.reduce((s, l) => s + l.shares, 0);
+  const cost_basis = lots.reduce((s, l) => s + l.shares * l.perShareBasis, 0);
+  return { shares, avg: shares > 0 ? cost_basis / shares : 0, cost_basis, realized, valid: true, error: null };
+}
+
+function TransactionRow({ tx, onChange, onRemove }) {
+  return (
+    <div className="grid grid-cols-12 gap-2 items-center">
+      <select
+        value={tx.action}
+        onChange={e => onChange({ ...tx, action: e.target.value })}
+        className={`col-span-2 h-9 px-2 rounded-lg border text-[12px] mono font-medium outline-none transition-colors ${
+          tx.action === 'BUY'
+            ? 'bg-accent-green/10 border-accent-green/25 text-accent-green'
+            : 'bg-accent-red/10 border-accent-red/25 text-accent-red'
+        }`}
+      >
+        <option value="BUY">BUY</option>
+        <option value="SELL">SELL</option>
+      </select>
+      <Input
+        type="date"
+        value={tx.date || ''}
+        onChange={e => onChange({ ...tx, date: e.target.value })}
+        className="col-span-3"
+      />
+      <Input
+        type="number"
+        step="0.0001"
+        value={tx.shares ?? ''}
+        onChange={e => onChange({ ...tx, shares: e.target.value === '' ? '' : Number(e.target.value) })}
+        placeholder="szt."
+        className="col-span-2"
+      />
+      <Input
+        type="number"
+        step="0.01"
+        value={tx.price_per_share ?? ''}
+        onChange={e => onChange({ ...tx, price_per_share: e.target.value === '' ? '' : Number(e.target.value) })}
+        placeholder="cena"
+        className="col-span-2"
+      />
+      <Input
+        type="number"
+        step="0.01"
+        value={tx.fees ?? ''}
+        onChange={e => onChange({ ...tx, fees: e.target.value === '' ? 0 : Number(e.target.value) })}
+        placeholder="prowizja"
+        className="col-span-2"
+      />
+      <button
+        onClick={onRemove}
+        title="Usuń transakcję"
+        className="col-span-1 h-9 rounded-lg text-white/40 hover:text-accent-red hover:bg-accent-red/10 border border-white/[0.06] hover:border-accent-red/30 flex items-center justify-center transition-colors"
+      >
+        <Icon name="trash" size={13} />
+      </button>
+    </div>
+  );
+}
+
 function EditPortfolioDialog({ open, onClose, holdings, onSave }) {
-  const [rows, setRows] = React.useState(() => holdings.map(h => ({ ...h })));
-  React.useEffect(() => { if (open) setRows(holdings.map(h => ({ ...h }))); }, [open, holdings]);
+  const today = new Date().toISOString().slice(0, 10);
+  const initialRow = () => ({
+    ticker: '',
+    name: '',
+    thesis: '',
+    keywords: [],
+    transactions: [
+      { date: today, action: 'BUY', shares: 0, price_per_share: 0, fees: 0, note: '' },
+    ],
+  });
+  const [rows, setRows] = React.useState(() => holdings.map(h => ({ ...h, transactions: [...(h.transactions || [])] })));
+  React.useEffect(() => {
+    if (open) setRows(holdings.map(h => ({ ...h, transactions: [...(h.transactions || [])] })));
+  }, [open, holdings]);
 
   const update = (i, patch) => setRows(r => r.map((x, j) => j === i ? { ...x, ...patch } : x));
   const remove = (i) => setRows(r => r.filter((_, j) => j !== i));
-  const add = () => setRows(r => [
-    ...r,
-    { ticker: '', name: '', shares: 0, entry_price: 0, entry_date: new Date().toISOString().slice(0, 10), thesis: '', keywords: [] },
-  ]);
+  const add = () => setRows(r => [...r, initialRow()]);
+
+  const updateTx = (rowIdx, txIdx, newTx) => setRows(r => r.map((row, j) => {
+    if (j !== rowIdx) return row;
+    const txs = row.transactions.map((tx, k) => k === txIdx ? newTx : tx);
+    return { ...row, transactions: txs };
+  }));
+  const addTx = (rowIdx) => setRows(r => r.map((row, j) => {
+    if (j !== rowIdx) return row;
+    return {
+      ...row,
+      transactions: [
+        ...row.transactions,
+        { date: today, action: 'BUY', shares: 0, price_per_share: 0, fees: 0, note: '' },
+      ],
+    };
+  }));
+  const removeTx = (rowIdx, txIdx) => setRows(r => r.map((row, j) => {
+    if (j !== rowIdx) return row;
+    return { ...row, transactions: row.transactions.filter((_, k) => k !== txIdx) };
+  }));
 
   return (
     <Dialog
       open={open} onClose={onClose}
       title="Edytuj portfel"
-      subtitle="Pozycje, tezy i słowa kluczowe"
+      subtitle="Tezy, transakcje, słowa kluczowe (FIFO cost basis)"
       width="max-w-4xl"
       footer={
         <>
@@ -263,68 +386,86 @@ function EditPortfolioDialog({ open, onClose, holdings, onSave }) {
       }
     >
       <div className="flex flex-col gap-3">
-        {rows.map((r, i) => (
-          <PMot.div
-            key={i}
-            initial={{ opacity: 0, y: 6 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: i * 0.03 }}
-            className="glass-soft rounded-xl p-4"
-          >
-            <div className="flex items-start gap-3 mb-3">
-              <div className="grid grid-cols-12 gap-2 flex-1">
-                <div className="col-span-2">
-                  <label className="text-[10.5px] uppercase tracking-[0.14em] text-white/40">Ticker</label>
-                  <Input value={r.ticker} onChange={e => update(i, { ticker: e.target.value.toUpperCase() })} placeholder="PKN" className="mt-1" />
+        {rows.map((r, i) => {
+          const summary = summarizeTransactions(r.transactions);
+          return (
+            <PMot.div
+              key={i}
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: i * 0.03 }}
+              className="glass-soft rounded-xl p-4"
+            >
+              <div className="flex items-start gap-3 mb-3">
+                <div className="grid grid-cols-12 gap-2 flex-1">
+                  <div className="col-span-3">
+                    <label className="text-[10.5px] uppercase tracking-[0.14em] text-white/40">Ticker</label>
+                    <Input value={r.ticker} onChange={e => update(i, { ticker: e.target.value.toUpperCase() })} placeholder="PKN" className="mt-1" />
+                  </div>
+                  <div className="col-span-9">
+                    <label className="text-[10.5px] uppercase tracking-[0.14em] text-white/40">Nazwa</label>
+                    <Input value={r.name || ''} onChange={e => update(i, { name: e.target.value })} placeholder="PKN Orlen" className="mt-1" />
+                  </div>
                 </div>
-                <div className="col-span-4">
-                  <label className="text-[10.5px] uppercase tracking-[0.14em] text-white/40">Nazwa</label>
-                  <Input value={r.name} onChange={e => update(i, { name: e.target.value })} placeholder="PKN Orlen" className="mt-1" />
-                </div>
-                <div className="col-span-2">
-                  <label className="text-[10.5px] uppercase tracking-[0.14em] text-white/40">Akcje</label>
-                  <Input type="number" value={r.shares} onChange={e => update(i, { shares: Number(e.target.value) })} className="mt-1" />
-                </div>
-                <div className="col-span-2">
-                  <label className="text-[10.5px] uppercase tracking-[0.14em] text-white/40">Entry price</label>
-                  <Input type="number" step="0.01" value={r.entry_price} onChange={e => update(i, { entry_price: Number(e.target.value) })} className="mt-1" />
-                </div>
-                <div className="col-span-2">
-                  <label className="text-[10.5px] uppercase tracking-[0.14em] text-white/40">Entry date</label>
-                  <Input type="date" value={r.entry_date} onChange={e => update(i, { entry_date: e.target.value })} className="mt-1" />
-                </div>
+                <button
+                  onClick={() => remove(i)}
+                  className="mt-5 h-9 w-9 rounded-lg text-white/40 hover:text-accent-red hover:bg-accent-red/10 border border-white/[0.06] hover:border-accent-red/30 flex items-center justify-center transition-colors"
+                  title="Usuń pozycję"
+                >
+                  <Icon name="trash" size={14} />
+                </button>
               </div>
-              <button
-                onClick={() => remove(i)}
-                className="mt-5 h-9 w-9 rounded-lg text-white/40 hover:text-accent-red hover:bg-accent-red/10 border border-white/[0.06] hover:border-accent-red/30 flex items-center justify-center transition-colors"
-                title="Usuń pozycję"
-              >
-                <Icon name="trash" size={14} />
-              </button>
-            </div>
 
-            <div className="mb-2">
-              <label className="text-[10.5px] uppercase tracking-[0.14em] text-white/40">Teza inwestycyjna</label>
-              <Textarea
-                value={r.thesis}
-                onChange={e => update(i, { thesis: e.target.value })}
-                placeholder="Krótkie uzasadnienie, dlaczego trzymasz tę pozycję…"
-                className="mt-1"
-                rows={2}
-              />
-            </div>
+              <div className="mb-3">
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-[10.5px] uppercase tracking-[0.14em] text-white/40">Transakcje (FIFO)</label>
+                  <span className={`mono text-[11px] ${summary.valid ? 'text-white/55' : 'text-accent-red'}`}>
+                    {summary.valid
+                      ? `${summary.shares.toFixed(summary.shares % 1 === 0 ? 0 : 4)} szt · avg ${summary.avg.toFixed(2)} PLN · cost ${summary.cost_basis.toFixed(2)}${summary.realized ? ` · realized ${summary.realized >= 0 ? '+' : ''}${summary.realized.toFixed(2)}` : ''}`
+                      : summary.error}
+                  </span>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  {(r.transactions || []).map((tx, k) => (
+                    <TransactionRow
+                      key={k}
+                      tx={tx}
+                      onChange={newTx => updateTx(i, k, newTx)}
+                      onRemove={() => removeTx(i, k)}
+                    />
+                  ))}
+                </div>
+                <button
+                  onClick={() => addTx(i)}
+                  className="mt-2 inline-flex items-center gap-1.5 px-2.5 h-7 rounded-md text-[11.5px] text-white/65 hover:text-white border border-dashed border-white/[0.12] hover:border-accent-violet/40 transition-colors"
+                >
+                  <Icon name="plus" size={11} /> Dodaj transakcję
+                </button>
+              </div>
 
-            <div>
-              <label className="text-[10.5px] uppercase tracking-[0.14em] text-white/40">Słowa kluczowe</label>
-              <div className="mt-1">
-                <KeywordsInput
-                  value={r.keywords}
-                  onChange={kw => update(i, { keywords: kw })}
+              <div className="mb-2">
+                <label className="text-[10.5px] uppercase tracking-[0.14em] text-white/40">Teza inwestycyjna</label>
+                <Textarea
+                  value={r.thesis || ''}
+                  onChange={e => update(i, { thesis: e.target.value })}
+                  placeholder="Krótkie uzasadnienie, dlaczego trzymasz tę pozycję…"
+                  className="mt-1"
+                  rows={2}
                 />
               </div>
-            </div>
-          </PMot.div>
-        ))}
+
+              <div>
+                <label className="text-[10.5px] uppercase tracking-[0.14em] text-white/40">Słowa kluczowe</label>
+                <div className="mt-1">
+                  <KeywordsInput
+                    value={r.keywords || []}
+                    onChange={kw => update(i, { keywords: kw })}
+                  />
+                </div>
+              </div>
+            </PMot.div>
+          );
+        })}
 
         <button
           onClick={add}

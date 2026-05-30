@@ -67,10 +67,23 @@ class BacktestService:
         start_date = start or self._bt_cfg.start_date
         end_date = end or self._bt_cfg.end_date
 
-        # Calculate initial_capital from portfolio: sum of entry_price * shares
-        initial_capital = sum(
-            holding.entry_price * holding.shares for holding in portfolio.holdings
-        )
+        # Initial capital = FIFO cost basis of each holding at the LATER of
+        # the user's backtest start and the holding's first BUY. This handles
+        # both cases cleanly:
+        #
+        # * Backtest 2020 with positions acquired 2024 → each holding's
+        #   contribution kicks in from its own first BUY date, so the user
+        #   sees realistic 'as if I had held this' returns instead of a
+        #   zero-capital error.
+        # * Backtest 2024 with positions acquired 2022 + 2023 SELLs → uses
+        #   FIFO basis of what's still active by 2024.
+        #
+        # Transactions DURING the window are not yet simulated (a v2
+        # extension would flow cash on each BUY/SELL).
+        initial_capital = 0.0
+        for holding in portfolio.holdings:
+            anchor = max(start_date, holding.first_entry_date)
+            initial_capital += holding.position_at(anchor)[1]
 
         panel = self._load_panel(
             tickers=portfolio.tickers,

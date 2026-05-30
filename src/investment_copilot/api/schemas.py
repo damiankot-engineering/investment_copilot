@@ -19,8 +19,26 @@ from investment_copilot.domain.prompts import MonitoringReport
 # --- Portfolio --------------------------------------------------------------
 
 
+class TransactionDTO(BaseModel):
+    """A single BUY or SELL row inside HoldingDTO.transactions."""
+
+    date: date
+    action: Literal["BUY", "SELL"]
+    shares: float
+    price_per_share: float
+    fees: float = 0.0
+    note: str = ""
+
+
 class HoldingDTO(BaseModel):
-    """A single holding as the frontend sees it (no derived pricing fields)."""
+    """A single holding as the frontend sees it (no derived pricing fields).
+
+    ``entry_price`` and ``entry_date`` remain on the wire for backwards
+    compatibility — they now reflect the FIFO-derived **average cost** and
+    **first BUY date**. The authoritative source of truth is
+    ``transactions``; the frontend should treat the legacy fields as
+    convenience read-only when no transaction-aware UI is wired yet.
+    """
 
     ticker: str = Field(description="Canonical Stooq form, e.g. 'pkn.pl'.")
     display_ticker: str = Field(
@@ -31,16 +49,32 @@ class HoldingDTO(BaseModel):
         ),
     )
     name: str | None = None
-    shares: float
-    entry_price: float
-    entry_date: date
+    shares: float = 0.0
+    entry_price: float = Field(default=0.0, description="Avg cost per active share (FIFO).")
+    entry_date: date = Field(
+        default_factory=date.today,
+        description=(
+            "Date of the earliest BUY. Defaulted when the client sends "
+            "only `transactions`; the backend re-derives it on save."
+        ),
+    )
     thesis: str
     keywords: list[str] = Field(default_factory=list)
+    transactions: list[TransactionDTO] = Field(
+        default_factory=list,
+        description=(
+            "Chronological transactions. On PUT the backend re-derives "
+            "shares/entry_price/entry_date from this list and ignores the "
+            "legacy scalar fields."
+        ),
+    )
+    realized_pnl: float = 0.0
 
 
 class HoldingStatusDTO(HoldingDTO):
     """Holding + computed pricing. Mirrors the frontend mock shape."""
 
+    n_transactions: int = 0
     last_price: float | None = None
     last_price_date: date | None = None
     value: float | None = None
@@ -64,6 +98,7 @@ class PortfolioStatusDTO(BaseModel):
     total_pnl: float
     total_pnl_pct: float
     total_cost_basis: float
+    total_realized_pnl: float = 0.0
     missing_data: list[str] = Field(default_factory=list)
     as_of: datetime
 

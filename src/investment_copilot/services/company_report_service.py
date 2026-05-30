@@ -536,9 +536,14 @@ class CompanyReportService:
         if f and f.sector:
             items.append(LabelValue(label="Sektor", value=f.sector))
         # Liczba akcji w portfelu
+        n_tx = len(h.transactions)
+        tx_suffix = f" · {n_tx} transakcji" if n_tx > 1 else ""
         items.append(LabelValue(
             label="W portfelu",
-            value=f"{h.shares:g} szt. · entry {h.entry_price:.2f} ({h.entry_date.isoformat()})",
+            value=(
+                f"{h.shares:g} szt. · avg {h.avg_entry_price:.2f} "
+                f"(od {h.first_entry_date.isoformat()}){tx_suffix}"
+            ),
         ))
         # PnL absolute
         if hs and hs.has_price:

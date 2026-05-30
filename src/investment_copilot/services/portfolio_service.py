@@ -173,6 +173,7 @@ class PortfolioService:
         total_value = sum(s.market_value or 0.0 for s in priced)
         total_pnl = total_value - priced_cost
         total_pnl_pct = (total_pnl / priced_cost) if priced_cost > 0 else 0.0
+        total_realized = sum(h.realized_pnl for h in portfolio.holdings)
 
         return PortfolioStatus(
             base_currency=portfolio.base_currency,
@@ -183,6 +184,7 @@ class PortfolioService:
             total_market_value=total_value,
             total_unrealized_pnl=total_pnl,
             total_unrealized_pnl_pct=total_pnl_pct,
+            total_realized_pnl=total_realized,
             missing_data=missing,
         )
 
@@ -200,9 +202,11 @@ class PortfolioService:
                 ticker=h.ticker,
                 name=h.name,
                 shares=h.shares,
-                entry_price=h.entry_price,
-                entry_date=h.entry_date,
+                entry_price=h.avg_entry_price,
+                entry_date=h.first_entry_date,
                 cost_basis=h.cost_basis,
+                realized_pnl=h.realized_pnl,
+                n_transactions=len(h.transactions),
             )
 
         last_price, last_date = _last_close(df)
@@ -214,9 +218,11 @@ class PortfolioService:
             ticker=h.ticker,
             name=h.name,
             shares=h.shares,
-            entry_price=h.entry_price,
-            entry_date=h.entry_date,
+            entry_price=h.avg_entry_price,
+            entry_date=h.first_entry_date,
             cost_basis=h.cost_basis,
+            realized_pnl=h.realized_pnl,
+            n_transactions=len(h.transactions),
             last_price=last_price,
             last_price_date=last_date,
             market_value=market_value,

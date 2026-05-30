@@ -3,44 +3,70 @@
 # Tickers use Stooq convention (lowercase + ".pl"). Variants like "PKN" or
 # "PKN.WA" are normalized automatically.
 #
+# Each holding is a list of BUY/SELL transactions. Current shares, FIFO
+# cost basis, average entry price and realized PnL are all derived from
+# this list — you never hand-maintain a "shares" total.
+#
+# Per-transaction fields:
+#   date            — trade date (no future dates).
+#   action          — "BUY" or "SELL".
+#   shares          — quantity (> 0).
+#   price_per_share — execution price (> 0).
+#   fees            — optional; BUY fees fold into the lot's cost basis,
+#                     SELL fees reduce realized PnL.
+#   note            — optional free-text label.
+#
 # Optional per holding:
 #   * name      — display name shown in reports.
 #   * keywords  — substrings used to filter RSS news. Defaults to the ticker
 #                 stem (e.g. "PKN") which often misses news that uses brand
 #                 names ("Orlen"). Set keywords explicitly for best matching.
 #
-# `entry_price` and `entry_date` drive live PnL tracking only. The backtester
-# ignores them and runs strategies from `backtest.start_date` in config.yaml.
+# Legacy single-entry holdings (entry_price / shares / entry_date) still load:
+# they are auto-migrated to one BUY transaction, and the next save rewrites
+# the file in the transaction format below.
 
 base_currency: PLN
 
 holdings:
   - ticker: pkn.pl
     name: PKN Orlen
-    shares: 100
-    entry_price: 65.40
-    entry_date: 2023-04-12
     keywords: [Orlen, PKN]
     thesis: |
       Integrated energy & refining champion. Dividend policy + Orlen-Lotos
       synergies. Risk: regulated prices, political exposure.
+    transactions:
+      - date: 2023-04-12
+        action: BUY
+        shares: 100
+        price_per_share: 65.40
+      - date: 2024-02-20
+        action: BUY
+        shares: 50
+        price_per_share: 58.10
+        fees: 12.50
+        note: averaging down
 
   - ticker: cdr.pl
     name: CD Projekt
-    shares: 25
-    entry_price: 142.10
-    entry_date: 2024-01-08
     keywords: [CD Projekt, CDR, Cyberpunk, Witcher]
     thesis: |
       Long-cycle IP holder (Witcher, Cyberpunk). Pipeline visibility through
       the next flagship release. Risk: execution and release-window slippage.
+    transactions:
+      - date: 2024-01-08
+        action: BUY
+        shares: 25
+        price_per_share: 142.10
 
   - ticker: pko.pl
     name: PKO BP
-    shares: 200
-    entry_price: 48.20
-    entry_date: 2023-09-05
     keywords: [PKO BP, "PKO Bank"]
     thesis: |
       Largest Polish bank, beneficiary of the rate cycle and improving CHF
       mortgage provisioning. Risk: macro, regulatory dividend caps.
+    transactions:
+      - date: 2023-09-05
+        action: BUY
+        shares: 200
+        price_per_share: 48.20

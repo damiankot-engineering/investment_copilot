@@ -240,7 +240,15 @@ def create_app() -> FastAPI:
         # (ticker normalization, no duplicates, no future entry dates).
         raw = payload.model_dump(mode="json")
         for h in raw.get("holdings", []):
+            # Fields the wire DTO carries but the domain doesn't accept (or
+            # re-derives). When the frontend sends a transactions[] list,
+            # also drop the legacy scalar fields so the migrator skips them.
             h.pop("display_ticker", None)
+            h.pop("realized_pnl", None)
+            if h.get("transactions"):
+                h.pop("shares", None)
+                h.pop("entry_price", None)
+                h.pop("entry_date", None)
         try:
             domain_portfolio = Portfolio.model_validate(raw)
         except Exception as exc:

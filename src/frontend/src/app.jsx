@@ -143,11 +143,16 @@ function App() {
       holdings: rows.map(r => ({
         ticker: r.ticker,
         name: r.name || null,
-        shares: Number(r.shares),
-        entry_price: Number(r.entry_price),
-        entry_date: r.entry_date,
-        thesis: r.thesis,
+        thesis: r.thesis || '',
         keywords: Array.isArray(r.keywords) ? r.keywords : [],
+        transactions: (r.transactions || []).map(tx => ({
+          date: tx.date,
+          action: tx.action,
+          shares: Number(tx.shares),
+          price_per_share: Number(tx.price_per_share),
+          fees: Number(tx.fees) || 0,
+          note: tx.note || '',
+        })),
       })),
     };
     try {

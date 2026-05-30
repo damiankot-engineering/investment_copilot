@@ -63,7 +63,7 @@ For automation / cron, see [CLI usage](#cli-usage). For full setup details and o
 
 ## Features
 
-- **Portfolio tracking** — define holdings in `portfolio.yaml` with shares, entry price, entry date, investment thesis, optional name and news keywords.
+- **Portfolio tracking** — define holdings in `portfolio.yaml` as a list of **BUY/SELL transactions** (date, shares, price, optional fees + note) plus an investment thesis, optional name and news keywords. Current shares, **FIFO cost basis** (compatible with Polish PIT reporting), average entry price and **realized PnL** are all derived from the transaction history. Legacy single-entry files (`entry_price` / `shares` / `entry_date`) are auto-migrated to a one-BUY transaction on load — no manual migration step.
 - **Free, fast data** — daily OHLCV from Stooq for any GPW ticker (free API key required, see [API keys](#api-keys)). Indices (`wig20`, `mwig40`, etc.) and equities are queried through the same adapter.
 - **News aggregation** — multiple Polish RSS feeds plus best-effort scraping of Stooq's per-symbol news block. Persisted in SQLite, deduplicated by URL, queryable per ticker.
 - **Backtesting** — portfolio-level simulator with three strategies (MA-crossover, time-series momentum, buy & hold). Equal-weight across active sleeves, daily checks, end-of-day fills, no leverage, no shorts, zero costs (v1). Equity curve and a full metrics suite (total / annualized return, volatility, Sharpe @ 252, max drawdown with duration, win rate). Configurable benchmark (`wig20` / `mwig40` / `swig80` / `wig` / `wig30` / arbitrary Stooq ticker) buy-and-hold in the same window.
@@ -71,6 +71,9 @@ For automation / cron, see [CLI usage](#cli-usage). For full setup details and o
 - **Grounded analysis** — quantitative metrics (HHI, top-3 concentration, per-holding 30/90/252d returns, distance from 52w high, annualized volatility, beta vs benchmark, top pairwise correlations) are computed in Python and injected into the prompt; the LLM cites specific `metric:KEY` / `news:N` / `fundamentals:TICKER.field` / `previous_report:LABEL` references; hallucinated citations are stripped Python-side before the result reaches the user. The last 2 Markdown reports are folded back in as RAG context so each run is framed as a delta over prior assessments.
 - **Watchlist** — tickers you research but don't own. Separate `watchlist.yaml` (gitignored alongside `portfolio.yaml`), optional `target_buy_price` per item (UI flags when current price hits the target), last price from the same OHLCV cache. **Update data** now refreshes watchlist OHLCV alongside portfolio holdings and merges watchlist keywords into the RSS news pipeline, so each item shows a 30-day news count next to its price. Edit through the Web GUI dialog or the YAML directly.
 - **Per-company monitoring** — each holding gets its own snapshot card with a **deterministic factsheet** (BR YoY for revenue/EBITDA/net profit, P/E, market cap, 52w range from OHLCV overlay, position PnL, sector, last quarter, next report countdown). The 4×2 KPI grid + market section + investor calendar render instantly with no LLM call. Click **Generate AI report** on a card to run ONE focused LLM call per ticker (TL;DR + 3-5 strengths + 3-5 risks, ~1.5k input tokens, must-cite validation — bullets without a known `metric:` / `news:N` / `fundamentals:field` / `thesis` / `portfolio:field` source are dropped Python-side). The whole portfolio's upcoming-reports calendar sits at the top of the tab. Each report is downloadable as a **standalone HTML** in the same equity-research one-pager template (light/dark themes, Fraunces serif + JetBrains Mono), persisted per-ticker in SQLite for the next visit. Replaces the legacy bulk-snapshot flow, which kept blowing past Groq's 12k TPM limit.
+- **Dividend calendar** — BiznesRadar's `/dywidenda` page is scraped per ticker (7-day SQLite cache) into typed `DividendEvent`s with amount per share, **ex-dividend (D-day) date**, payment date, AGM date and status. Upcoming D-days and payments are merged with estimated earnings-report dates into the chronological "Najbliższe wydarzenia" list at the top of the Monitoring tab.
+- **AI analysis cache** — the portfolio analysis bundle (summary + risk alerts + quant metrics) is persisted in SQLite keyed by a hash of the portfolio content, so re-opening the AI Analysis tab shows the previous result instantly without spending tokens. The cache is **auto-invalidated on `update-data`** (fresh prices/news = stale analysis); a `Regeneruj` button forces a new run on demand.
+- **Live progress streaming** — `update-data` is also exposed as a Server-Sent Events endpoint. The web UI swaps its indeterminate shimmer for a **determinate progress bar** with a per-ticker status line (`OHLCV cbf.pl (3/6)` → benchmark → news → done) driven by the same pipeline the POST endpoint runs.
 - **CLI** — Typer-based commands (`update-data`, `run-analysis`, `backtest`, `generate-report`) with Rich-rendered tables, severity-coloured risk panels, sensible exit codes, and graceful degradation when the LLM is unreachable.
 - **Markdown reports** — generated to `reports/`, fully Polish, with portfolio table, backtest metrics vs benchmark, AI sections, and warnings.
 - **Local persistence** — SQLite for news + metadata, parquet for OHLCV. Restart-safe, queryable, no ORM overhead.
@@ -182,10 +185,10 @@ investment-copilot/
 │   ├── config/                       # AppConfig + loader
 │   ├── domain/
 │   │   ├── models.py                 # core types (Ticker, NewsItem, ...)
-│   │   ├── portfolio.py              # Holding, Portfolio, status models
+│   │   ├── portfolio.py              # Transaction, Holding (FIFO), Portfolio, status
 │   │   ├── watchlist.py              # WatchlistItem, Watchlist (research tickers)
 │   │   ├── calendar.py               # CalendarEvent, CalendarBundle (legacy aggregator)
-│   │   ├── fundamentals.py           # fundamentals + monitoring snapshots
+│   │   ├── fundamentals.py           # fundamentals + DividendEvent + monitoring snapshots
 │   │   ├── company_report.py         # CompanyReport (per-ticker snapshot schema)
 │   │   ├── analysis_metrics.py       # HHI, beta, returns, correlations, CitationRegistry
 │   │   ├── strategies/               # MACrossover, Momentum, BuyAndHold
@@ -391,39 +394,64 @@ base_currency: PLN
 # Tickers are normalized to Stooq form: "PKN", "PKN.WA", and "pkn.pl" are
 # all equivalent and stored as "pkn.pl" internally.
 #
+# Each holding is a list of BUY/SELL transactions. Current shares, FIFO
+# cost basis, average entry price and realized PnL are all DERIVED from
+# this list — you never hand-maintain a "shares" total.
+#
+# Per-transaction fields:
+#   date            — trade date (no future dates).
+#   action          — "BUY" or "SELL".
+#   shares          — quantity (> 0).
+#   price_per_share — execution price (> 0).
+#   fees            — optional; BUY fees fold into the lot's cost basis,
+#                     SELL fees reduce realized PnL.
+#   note            — optional free-text label.
+#
 # Optional per-holding fields:
 #   name      — display name shown in reports.
 #   keywords  — substrings used to filter RSS news. Defaults to the ticker
 #               stem (e.g. "PKN") which often misses news that uses brand
 #               names ("Orlen"). Set keywords explicitly for best matching.
-#
-# `entry_price` and `entry_date` drive live PnL tracking only. The
-# backtester ignores them and runs strategies from `backtest.start_date`
-# in config.yaml — otherwise results would be biased by your real entries.
 
 holdings:
   - ticker: pkn.pl
     name: PKN Orlen
-    shares: 100
-    entry_price: 65.40
-    entry_date: 2023-04-12
     keywords: [Orlen, PKN]
     thesis: |
       Integrated energy & refining champion. Dividend policy + Orlen-Lotos
       synergies. Risk: regulated prices, political exposure.
+    transactions:
+      - date: 2023-04-12
+        action: BUY
+        shares: 100
+        price_per_share: 65.40
+      - date: 2024-02-20
+        action: BUY
+        shares: 50
+        price_per_share: 58.10
+        fees: 12.50
+        note: averaging down
 
   - ticker: cdr.pl
     name: CD Projekt
-    shares: 25
-    entry_price: 142.10
-    entry_date: 2024-01-08
     keywords: [CD Projekt, CDR, Cyberpunk, Witcher]
     thesis: |
       Long-cycle IP holder (Witcher, Cyberpunk). Pipeline visibility through
       the next flagship release. Risk: execution and release-window slippage.
+    transactions:
+      - date: 2024-01-08
+        action: BUY
+        shares: 25
+        price_per_share: 142.10
+
+# Legacy single-entry holdings (entry_price / shares / entry_date) still
+# load — they are auto-migrated to one BUY transaction, and the next save
+# rewrites the file in the transaction format above.
 ```
 
-Validation rules: positive shares and entry prices, no future entry dates, non-empty thesis, no duplicate tickers (after normalization), no unknown fields.
+Validation rules: positive shares/prices, no future transaction dates, no SELL that exceeds the shares held at that point (FIFO overdraft), non-empty thesis, no duplicate tickers (after normalization), no unknown fields.
+
+The backtester reconstructs each holding's cost basis as of `backtest.start_date` from the transaction history (or the holding's first BUY, whichever is later), so a window that starts before some of your buys still produces sensible "as if I had held this" returns.
 
 ---
 
@@ -645,10 +673,12 @@ The FastAPI app at `investment_copilot.api.main:app` exposes every orchestrator 
 | GET | `/api/strategies` | — | `[{value, label}, …]` |
 | GET | `/api/portfolio` | — | `PortfolioDTO` (holdings as the frontend sees them) |
 | PUT | `/api/portfolio` | `PortfolioDTO` | round-trips through `Portfolio` validators and writes `portfolio.yaml` (with `.bak`) |
-| GET | `/api/portfolio/status` | — | `PortfolioStatusDTO` with live PnL per holding |
-| POST | `/api/data/update` | `?news_days_back=14` | `DataUpdateResult` (OHLCV updated/failed, benchmark rows, news inserted) |
-| POST | `/api/backtest` | `?strategy=&benchmark=&start_date=&end_date=&include_benchmark=` | `BacktestResultDTO` (% return curve, drawdown, metrics) |
-| POST | `/api/analysis` | `?include_risks=true&news_days_back=14` | `AnalysisBundleDTO` (status + Polish summary + risk alerts) |
+| GET | `/api/portfolio/status` | — | `PortfolioStatusDTO` with live PnL, realized PnL + transaction count per holding |
+| POST | `/api/data/update` | `?news_days_back=14` | `DataUpdateResult` (OHLCV updated/failed, benchmark rows, news inserted). Invalidates the cached analysis. |
+| GET | `/api/data/update/stream` | `?news_days_back=14` | **SSE** — same side effects as the POST variant, emitting per-ticker + per-stage progress events, terminating with a `done` event shaped like `DataUpdateResult` |
+| POST | `/api/backtest` | `?strategy=&benchmark=&start_date=&end_date=&include_benchmark=` | `BacktestResultDTO` (% return curve, drawdown, metrics). Auto-extends the benchmark cache backwards if `start_date` precedes it. |
+| POST | `/api/analysis` | `?include_risks=true&news_days_back=14` | `AnalysisBundleDTO` (status + Polish summary + risk alerts). Result is cached in SQLite. |
+| GET | `/api/analysis/cached` | — | the last persisted `AnalysisBundleDTO` for the current portfolio, or `null` (cache cleared on `update-data`) |
 | GET / POST | `/api/reports` | `GenerateReportRequest` on POST | list of reports / a new report |
 | GET | `/api/reports/{name}` | — | report content as Markdown |
 | GET | `/api/reports/{name}/download` | — | file download |
@@ -660,7 +690,7 @@ The FastAPI app at `investment_copilot.api.main:app` exposes every orchestrator 
 | GET | `/api/companies/{ticker}/report` | — | cached AI-generated `CompanyReport`, or `null` if never generated |
 | POST | `/api/companies/{ticker}/report` | — | run ONE LLM call (must-cite narrative), persist to SQLite `kv_cache`, return full `CompanyReport` |
 | GET | `/api/companies/{ticker}/report.html` | — | standalone HTML download (template + injected JSON); falls back to factsheet if no cached AI report |
-| GET | `/api/companies/upcoming` | — | upcoming-reports calendar across the whole portfolio (sorted, closest first) |
+| GET | `/api/companies/upcoming` | — | upcoming events across the whole portfolio — estimated earnings-report dates + dividend D-days + dividend payments, sorted closest-first |
 | GET | `/api/calendar` | — | **(legacy)** `CalendarBundleDTO` — replaced by `/api/companies/upcoming` in the UI |
 | POST | `/api/monitoring` | `RunMonitoringRequest` | **(legacy)** old bulk-snapshot pipeline; the UI no longer calls it but it still works |
 | GET / DELETE | `/api/monitoring/reports{/name}` | — | **(legacy)** old monitoring HTML report list / single / delete |
@@ -713,13 +743,25 @@ curl -s -X POST http://localhost:8000/api/companies/cbf.pl/report | jq '{tldr, s
 # Download the standalone HTML one-pager (cached if generated, otherwise falls back to factsheet)
 curl -s http://localhost:8000/api/companies/cbf.pl/report.html -o cbf_report.html
 
-# Upcoming reports across the whole portfolio (the calendar at the top of the Monitoring tab)
+# Upcoming events (earnings + dividend D-days + payments) across the portfolio
 curl -s http://localhost:8000/api/companies/upcoming | jq
+
+# Watch the update-data pipeline stream per-ticker progress (Server-Sent Events)
+curl -N http://localhost:8000/api/data/update/stream?news_days_back=14
+
+# Reuse the cached AI analysis without spending tokens (null if never run / invalidated)
+curl -s http://localhost:8000/api/analysis/cached | jq '.analysis.summary_md // "no cache"'
 ```
 
 ### Design notes
 
 - **Single wiring point.** Both the CLI and the API construct the same `ServiceContainer` via `build_container(load_config(...))`. The API caches it process-wide with `functools.lru_cache`.
+- **FIFO transactions are the source of truth.** A holding's `shares`, `cost_basis`, `avg_entry_price` and `realized_pnl` are computed properties over its `transactions` list (see `domain/portfolio.py::_fifo_walk`). SELL transactions consume the oldest active BUY lots first; BUY fees fold into the lot's per-share basis, SELL fees reduce realized PnL. The walk runs once at load time so a SELL that overdraws the position is rejected as a clean validation error. Wire DTOs still expose `entry_price`/`entry_date` (now the FIFO-derived average + first-buy date) for backwards compatibility, but `PUT /api/portfolio` re-derives everything from `transactions` and ignores those scalars.
+- **AI analysis cache + invalidation.** `POST /api/analysis` stores the rendered bundle under `analysis:{sha256(portfolio)[:16]}` in `kv_cache`; `GET /api/analysis/cached` reads it back and `POST /api/data/update` deletes it. Hashing the portfolio content means editing a holding naturally misses the old cache, while leaving the data untouched keeps it warm.
+- **SSE without a task queue.** `/api/data/update/stream` runs the same synchronous pipeline in a worker thread, pushing progress dicts onto an `asyncio.Queue` via `loop.call_soon_threadsafe`; the response generator drains the queue as `text/event-stream`. No Celery/Redis — fine for single-user local use.
+- **Per-company monitoring split.** The new architecture (`/api/companies/*`) replaces the legacy single-call `/api/monitoring` pipeline. Splitting the LLM work to ONE focused per-ticker call (~1.5k input tokens, must-cite output) keeps every request well under Groq's 12k TPM cap, isolates failures (one ticker failing no longer wrecks the whole snapshot), and gives the user fine-grained control over when to spend tokens. The deterministic factsheet renders without any LLM call. Generated reports are persisted in SQLite (`kv_cache` table, key `company_report:{ticker}`) so the next page load shows the prior AI report immediately.
+- **Dividends scraped on a slow cadence.** BiznesRadar's `/dywidenda/{TICKER}` page is parsed into `DividendEvent`s and cached 7 days (dividend schedules rarely change), separate from the 24h fundamentals cache. Failures degrade silently to no dividend rows rather than faulting the monitoring calendar.
+- **Backtest auto-extends benchmark cache.** When the user picks a start date earlier than the current benchmark cache earliest date, `BacktestService._ensure_benchmark_covers()` triggers a refresh from `start - 5 days` before loading. Best-effort: if the refresh fails (offline / rate limit), the backtest falls through to whatever is on disk rather than aborting.
 - **Per-company monitoring split.** The new architecture (`/api/companies/*`) replaces the legacy single-call `/api/monitoring` pipeline. Splitting the LLM work to ONE focused per-ticker call (~1.5k input tokens, must-cite output) keeps every request well under Groq's 12k TPM cap, isolates failures (one ticker failing no longer wrecks the whole snapshot), and gives the user fine-grained control over when to spend tokens. The deterministic factsheet renders without any LLM call. Generated reports are persisted in SQLite (`kv_cache` table, key `company_report:{ticker}`) so the next page load shows the prior AI report immediately.
 - **Backtest auto-extends benchmark cache.** When the user picks a start date earlier than the current benchmark cache earliest date, `BacktestService._ensure_benchmark_covers()` triggers a refresh from `start - 5 days` before loading. Best-effort: if the refresh fails (offline / rate limit), the backtest falls through to whatever is on disk rather than aborting.
 - **Wire DTOs decouple frontend from domain.** Domain models use field names like `total_market_value` / `unrealized_pnl_pct` (fractions); the frontend sees `total_value` / `pnl_pct` (percent). Adapters in `api/adapters.py` translate at the wire boundary so neither side has to care about the other's naming. Tickers come back in both forms (`ticker: 'pkn.pl'`, `display_ticker: 'PKN'`).
@@ -731,9 +773,9 @@ curl -s http://localhost:8000/api/companies/upcoming | jq
 ### What v1 deliberately doesn't have
 
 - **No auth.** Single-user assumed. Bind to `127.0.0.1` (uvicorn default with `--host` unset is `127.0.0.1`); do not expose this directly to the internet without adding an auth dependency.
-- **No streaming progress.** `update-data` and `analysis` can take 5–60 s; the UI shows a spinner and waits for the full response. Add SSE / WebSockets if you want incremental feedback.
 - **No background scheduler.** `update-data` is on-demand. A deployment would add cron / APScheduler.
-- **No persistence of analysis history.** Each `/api/analysis` call hits Groq fresh. Reports and monitoring snapshots are persisted to disk; AI summaries inside them are not separately stored.
+- **No analysis history timeline.** The latest analysis bundle is cached (and invalidated on data refresh), but prior runs aren't retained as a browsable history — each regen overwrites the last.
+- **No intra-window transaction simulation in backtest.** The backtest fixes a starting position from the FIFO cost basis as of `start_date`; BUY/SELL transactions that fall *inside* the backtest window aren't replayed as cash flows on the equity curve.
 
 ---
 

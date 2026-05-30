@@ -57,7 +57,7 @@ def render_holdings_table(portfolio: Portfolio) -> str:
     for h in portfolio.holdings:
         lines.append(
             f"| {h.ticker} | {_safe(h.name) or '—'} | {h.shares:g} | "
-            f"{h.entry_price:.2f} | {h.entry_date.isoformat()} | "
+            f"{h.avg_entry_price:.2f} | {h.first_entry_date.isoformat()} | "
             f"{h.cost_basis:.2f} | {_one_liner(h.thesis, 120)} |"
         )
     return "\n".join(lines)
