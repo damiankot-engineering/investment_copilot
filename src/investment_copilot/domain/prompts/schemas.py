@@ -470,7 +470,7 @@ class MonitoringReport(BaseModel):
 
 
 class CompanyNarrativeBullet(BaseModel):
-    """Bullet point with a citation key — used in CompanyReport strengths/risks."""
+    """Bullet point with one or more citation keys — used in strengths/risks."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -479,13 +479,15 @@ class CompanyNarrativeBullet(BaseModel):
         max_length=240,
         description="Treść mocnej strony / ryzyka po polsku, 1 zdanie.",
     )
-    citation: str = Field(
-        min_length=3,
-        max_length=80,
+    citations: list[str] = Field(
+        min_length=1,
+        max_length=4,
         description=(
-            "Klucz źródła z sekcji 'Dostępne źródła'. Dozwolone prefiksy: "
-            "'metric:', 'news:', 'fundamentals:', 'portfolio:', 'thesis'. "
-            "Bullety bez znanego źródła są odrzucane przy walidacji."
+            "Klucze źródeł z sekcji 'Dostępne źródła' wspierające ten bullet. "
+            "Dozwolone prefiksy: 'metric:', 'news:', 'fundamentals:', "
+            "'portfolio:', 'thesis'. Podaj MINIMUM 2 różne źródła, gdy są "
+            "dostępne (np. liczba + news); 1 wystarczy tylko gdy kontekst ma "
+            "jedno źródło. Klucze nieobecne w kontekście są odrzucane."
         ),
     )
 

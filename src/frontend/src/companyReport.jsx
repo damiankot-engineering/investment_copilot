@@ -93,7 +93,10 @@ function BulletList({ items, kind, emptyText }) {
       {items.map((it, i) => {
         const isObj = typeof it === 'object';
         const text  = isObj ? it.text : it;
-        const cite  = isObj ? it.citation : null;
+        // Support both the new `citations` array and the legacy single `citation`.
+        const cites = isObj
+          ? (Array.isArray(it.citations) ? it.citations : (it.citation ? [it.citation] : []))
+          : [];
         const hl    = isObj ? it.highlight : null;
         return (
           <li
@@ -105,11 +108,11 @@ function BulletList({ items, kind, emptyText }) {
               <div className="text-[13px] text-white/85 leading-relaxed">
                 {hl && <strong className="text-white mr-1">{hl}</strong>}
                 {text}
-                {cite && (
-                  <span className="ml-1.5 mono text-[10px] text-white/35 align-middle">
-                    [{cite}]
+                {cites.map((c, ci) => (
+                  <span key={ci} className="ml-1.5 mono text-[10px] text-white/35 align-middle">
+                    [{c}]
                   </span>
-                )}
+                ))}
               </div>
             </div>
           </li>

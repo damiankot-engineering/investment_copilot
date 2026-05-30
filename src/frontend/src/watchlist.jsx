@@ -165,6 +165,7 @@ function EditWatchlistDialog({ open, onClose, items, onSave }) {
 function WatchlistTab() {
   const [status, setStatus] = React.useState({ as_of: new Date().toISOString(), items: [], missing_data: [] });
   const [loading, setLoading] = React.useState(true);
+  const [refreshing, setRefreshing] = React.useState(false);
   const [editOpen, setEditOpen] = React.useState(false);
   const toast = useToast();
 
@@ -181,6 +182,24 @@ function WatchlistTab() {
   }, [toast]);
 
   React.useEffect(() => { loadStatus(); }, [loadStatus]);
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    try {
+      const s = await window.API.refreshWatchlist(14);
+      setStatus(s);
+      const failed = (s.missing_data || []).length;
+      toast.success(
+        'Watchlist odświeżona',
+        `${s.items.length} pozycji` + (failed ? ` · brak danych: ${failed}` : ''),
+      );
+    } catch (err) {
+      console.error(err);
+      toast.error('Odświeżenie nie powiodło się', err.detail || err.message);
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   const onSave = async (rows) => {
     const payload = {
@@ -215,6 +234,9 @@ function WatchlistTab() {
           <div className="flex items-center gap-2">
             <Button variant="outline" icon="edit" onClick={() => setEditOpen(true)}>
               Edytuj watchlist
+            </Button>
+            <Button variant="primary" icon="refresh" loading={refreshing} onClick={onRefresh}>
+              Odśwież ceny
             </Button>
           </div>
         }

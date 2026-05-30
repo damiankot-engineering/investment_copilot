@@ -99,6 +99,7 @@ class CompanyReportService:
         holding, holding_status = self._lookup(portfolio, status, ticker)
         fundamentals = self._fetch_fundamentals_cached(holding.ticker)
         fundamentals = self._overlay_ohlcv(holding.ticker, fundamentals)
+        fundamentals = self._overlay_dividend_yield(holding.ticker, fundamentals)
         news = self._load_news(holding.ticker)
         return self._build_report(
             holding=holding,
@@ -119,6 +120,7 @@ class CompanyReportService:
         holding, holding_status = self._lookup(portfolio, status, ticker)
         fundamentals = self._fetch_fundamentals_cached(holding.ticker)
         fundamentals = self._overlay_ohlcv(holding.ticker, fundamentals)
+        fundamentals = self._overlay_dividend_yield(holding.ticker, fundamentals)
         news = self._load_news(holding.ticker)
 
         warnings: list[str] = []
@@ -228,6 +230,36 @@ class CompanyReportService:
                     ))
         items.sort(key=lambda t: t[0])
         return [it for _, it in items]
+
+    def _overlay_dividend_yield(
+        self,
+        ticker: str,
+        fundamentals: FundamentalsSnapshot | None,
+    ) -> FundamentalsSnapshot | None:
+        """Compute a trailing dividend yield when BR doesn't provide one.
+
+        BiznesRadar's "stopa dywidendy" column is JS-rendered (empty in the
+        static HTML we scrape), so ``fundamentals.dividend_yield`` is almost
+        always ``None``. We derive it instead as ``latest_annual_dividend /
+        current_price``: take the most recent fiscal year's total dividend
+        per share from the ``/dywidenda`` table (covers both upcoming
+        "uchwalona" and paid years) over the latest close. Stored as a
+        fraction (0.0126 == 1.26%) to match the field's convention.
+        """
+        if fundamentals is None or fundamentals.dividend_yield is not None:
+            return fundamentals
+        price = fundamentals.last_price
+        if price is None or price <= 0:
+            return fundamentals
+        events = self._fetch_dividends_cached(ticker)
+        with_amount = [e for e in events if e.amount_per_share is not None]
+        if not with_amount:
+            return fundamentals
+        latest = max(with_amount, key=lambda e: e.fiscal_year)
+        if latest.amount_per_share is None or latest.amount_per_share <= 0:
+            return fundamentals
+        yld = latest.amount_per_share / price
+        return fundamentals.model_copy(update={"dividend_yield": yld})
 
     # --------------------------------------------------------------- Internal
 
@@ -390,11 +422,11 @@ class CompanyReportService:
         else:
             tldr = narrative.tldr
             strengths = [
-                BulletWithCitation(text=b.text, citation=b.citation)
+                BulletWithCitation(text=b.text, citations=list(b.citations))
                 for b in narrative.strengths
             ]
             risks = [
-                BulletWithCitation(text=b.text, citation=b.citation)
+                BulletWithCitation(text=b.text, citations=list(b.citations))
                 for b in narrative.risks
             ]
             confidence = narrative.confidence
@@ -649,21 +681,25 @@ class CompanyReportService:
             temperature=self._llm_cfg.temperature,
             max_tokens=1500,
         )
-        # Strip unknown citations
+        # Per-bullet: keep only citations present in the registry. A bullet
+        # that loses ALL its citations is dropped (unsupported claim);
+        # bullets that keep at least one survive with the valid subset.
         dropped: list[str] = []
-        kept_strengths = []
-        for b in result.strengths:
-            if b.citation in registry:
-                kept_strengths.append(b)
-            else:
-                dropped.append(b.citation)
-        kept_risks = []
-        for b in result.risks:
-            if b.citation in registry:
-                kept_risks.append(b)
-            else:
-                dropped.append(b.citation)
-        # Backfill if validation killed too many (LLM still ran, keep what we have)
+
+        def _filter(bullets):
+            kept = []
+            for b in bullets:
+                valid = [c for c in b.citations if c in registry]
+                invalid = [c for c in b.citations if c not in registry]
+                dropped.extend(invalid)
+                if valid:
+                    kept.append(b.model_copy(update={"citations": valid}))
+            return kept
+
+        kept_strengths = _filter(result.strengths)
+        kept_risks = _filter(result.risks)
+        # Backfill if validation killed everything (LLM still ran — keep its
+        # output rather than render an empty section).
         cleaned = result.model_copy(update={
             "strengths": kept_strengths or result.strengths,
             "risks": kept_risks or result.risks,
@@ -741,6 +777,18 @@ def _render_narrative_context(
 
     # BR fundamentals
     if fundamentals is not None:
+        if fundamentals.last_price is not None:
+            registry.add("fundamentals:last_price")
+            band = ""
+            if fundamentals.week52_low is not None and fundamentals.week52_high is not None:
+                band = (
+                    f"  (52t: {fundamentals.week52_low:.2f}–"
+                    f"{fundamentals.week52_high:.2f})"
+                )
+            src_lines.append(
+                f"- `fundamentals:last_price` = "
+                f"{fundamentals.last_price:.2f} PLN{band}"
+            )
         if fundamentals.revenue_yoy_pct is not None:
             registry.add("metric:revenue_yoy_pct")
             src_lines.append(

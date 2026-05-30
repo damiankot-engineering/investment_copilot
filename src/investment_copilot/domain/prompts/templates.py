@@ -200,24 +200,42 @@ COMPANY_NARRATIVE_SYSTEM: Final[str] = (
     "rynkowe i kalendarz są już wypełnione deterministycznie z BR i OHLCV; "
     "Twoja rola to dodać 'kolor' i ocenę.\n\n"
     "ŻELAZNE REGUŁY:\n"
-    "1. KAŻDY bullet w 'strengths' i 'risks' MUSI mieć cytowanie z "
-    "sekcji 'Dostępne źródła' kontekstu. Bullet bez znanego klucza = "
-    "halucynacja, zostanie usunięty przy walidacji.\n"
+    "1. KAŻDY bullet w 'strengths' i 'risks' MUSI mieć pole `citations` — "
+    "listę kluczy z sekcji 'Dostępne źródła'. Podaj MINIMUM 2 różne źródła "
+    "gdy kontekst je ma (np. liczba BR + news, albo dwie różne metryki); "
+    "tylko 1 dopuszczalne, gdy realnie istnieje jedno źródło. Klucz spoza "
+    "kontekstu = halucynacja, zostanie usunięty; bullet bez żadnego "
+    "ważnego klucza znika w całości.\n"
     "2. TL;DR musi zawierać przynajmniej JEDNĄ liczbę z BR YoY lub "
     "wskaźników rynkowych — zacytuj wprost (np. 'EBITDA +35% r/r').\n"
     "3. NIE wymyślaj liczb spoza kontekstu. Brak danych = pisz o tezie i "
     "newsach, nie zgaduj YoY.\n"
     "4. ETF/fundusz indeksowy: pisz o ekspozycji, sektorze, dywidendzie "
     "— nie o wynikach kwartalnych.\n"
-    "5. Confidence: 7-9 gdy są BR YoY + ≥2 świeże news; 4-6 gdy braki."
+    "5. Łącz źródła w jednym bullecie: argument ilościowy (metric/"
+    "fundamentals) + potwierdzenie jakościowe (news/thesis) jest mocniejszy "
+    "niż samotna liczba.\n"
+    "6. Confidence: 7-9 gdy są BR YoY + ≥2 świeże news; 4-6 gdy braki.\n\n"
+    "PRZYKŁAD dobrego bullet (mocna strona):\n"
+    '  {"text": "Dynamiczny wzrost rentowności — EBITDA +35% r/r przy '
+    'przychodach +29%, co potwierdza dźwignię operacyjną z tezy.", '
+    '"citations": ["metric:ebitda_yoy_pct", "metric:revenue_yoy_pct"]}\n'
+    "PRZYKŁAD dobrego bullet (ryzyko):\n"
+    '  {"text": "Kurs −11% od szczytu 52-tyg. zbiega się z negatywnym '
+    'sygnałem z komunikatu o przesunięciu premiery.", '
+    '"citations": ["metric:distance_from_52w_high_pct", "news:1"]}\n'
+    "ŹLE (jedno źródło gdy dostępne więcej, ogólnik): "
+    '{"text": "Spółka rośnie.", "citations": ["thesis"]}'
 )
 
 COMPANY_NARRATIVE_USER_TEMPLATE: Final[str] = (
     "Kontekst dla {ticker}:\n\n{context}\n\n"
     "Wygeneruj jeden obiekt JSON `CompanyNarrative`:\n"
     " - 'tldr': 2-3 zdania, min. 1 liczba z kontekstu wprost.\n"
-    " - 'strengths': 3-5 mocnych stron, każda z `citation` (np. "
-    "`metric:revenue_yoy_pct`, `news:2`, `thesis`).\n"
-    " - 'risks': 3-5 ryzyk, każde z `citation`.\n"
+    " - 'strengths': 3-5 mocnych stron; KAŻDA z `citations` (lista, "
+    "min. 2 klucze gdy dostępne, np. "
+    "`[\"metric:revenue_yoy_pct\", \"news:2\"]`).\n"
+    " - 'risks': 3-5 ryzyk; KAŻDE z `citations` (lista, min. 2 gdy "
+    "dostępne).\n"
     " - 'confidence': 1-10.\n"
 )

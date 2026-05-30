@@ -329,6 +329,30 @@ def create_app() -> FastAPI:
         )
         return adapters.watchlist_status_to_dto(status_obj)
 
+    @app.post(
+        "/api/watchlist/refresh",
+        response_model=WatchlistStatusDTO,
+        tags=["watchlist"],
+    )
+    async def refresh_watchlist(
+        wl_path: Annotated[Path, Depends(get_watchlist_path)],
+        orch: Annotated[Orchestrator, Depends(get_orchestrator)],
+        container: Annotated[ServiceContainer, Depends(get_container)],
+        news_days_back: int = 14,
+    ) -> WatchlistStatusDTO:
+        """Refresh OHLCV + news for watchlist tickers only, then return the
+        enriched status. Lighter than the portfolio-wide `update-data` —
+        skips benchmark + portfolio holdings."""
+        wl = await asyncio.to_thread(load_watchlist, str(wl_path))
+        if wl.items:
+            await asyncio.to_thread(
+                orch.update_watchlist_data, wl, news_days_back=news_days_back
+            )
+        status_obj = await asyncio.to_thread(
+            container.watchlist_service.current_status, wl
+        )
+        return adapters.watchlist_status_to_dto(status_obj)
+
     # -------------------------------------------------------------- Calendar
 
     @app.get(

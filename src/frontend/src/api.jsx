@@ -66,6 +66,8 @@
     getWatchlist:        () => request('GET', '/api/watchlist'),
     putWatchlist:        (wl) => request('PUT', '/api/watchlist', { body: wl }),
     getWatchlistStatus:  () => request('GET', '/api/watchlist/status'),
+    refreshWatchlist:    (newsDaysBack = 14) =>
+      request('POST', '/api/watchlist/refresh', { query: { news_days_back: newsDaysBack } }),
 
     // Calendar
     getCalendar:         () => request('GET', '/api/calendar'),

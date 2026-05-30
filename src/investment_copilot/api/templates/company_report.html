@@ -155,7 +155,11 @@
     if (items.length === 0) { root.innerHTML = '<li style="color:var(--muted);font-style:italic">Brak danych — wygeneruj raport AI.</li>'; return; }
     root.innerHTML = items.map(function (it) {
       var hl = it.highlight ? ('<strong>' + escapeHtml(it.highlight) + '</strong> ') : "";
-      var cit = it.citation ? ('<span class="citation">[' + escapeHtml(it.citation) + ']</span>') : "";
+      // Support new `citations` array + legacy single `citation`.
+      var cites = Array.isArray(it.citations) ? it.citations : (it.citation ? [it.citation] : []);
+      var cit = cites.map(function (c) {
+        return '<span class="citation">[' + escapeHtml(c) + ']</span>';
+      }).join("");
       return '<li>' + hl + escapeHtml(it.text) + cit + '</li>';
     }).join("");
   }

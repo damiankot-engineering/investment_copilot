@@ -145,6 +145,53 @@ class Orchestrator:
 
         return report
 
+    def update_watchlist_data(
+        self,
+        watchlist: Watchlist,
+        *,
+        start: date | None = None,
+        end: date | None = None,
+        news_days_back: int = 14,
+    ) -> RefreshReport:
+        """Refresh OHLCV + news for WATCHLIST tickers only (no benchmark).
+
+        A lighter sibling of :meth:`update_data` for the Watchlist tab's
+        own refresh button — skips the benchmark and the portfolio holdings
+        so it returns faster when the user only wants fresh watchlist prices.
+        """
+        cfg = self._container.config
+        data = self._container.data_service
+        start_date = start or cfg.backtest.start_date
+        report = RefreshReport()
+
+        tickers = list(watchlist.tickers)
+        if not tickers:
+            return report
+
+        try:
+            updated = data.refresh_ohlcv(tickers, start=start_date, end=end)
+            report.ohlcv_updated.update(updated)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("update_watchlist_data: OHLCV refresh aborted")
+            for t in tickers:
+                report.ohlcv_failed.setdefault(t, str(exc))
+
+        try:
+            from datetime import timedelta
+
+            since = datetime.now(timezone.utc) - timedelta(
+                days=max(0, news_days_back)
+            )
+            keywords = self._container.watchlist_service.keywords_map(watchlist)
+            report.news_inserted = data.refresh_news(
+                since, keywords_by_ticker=keywords
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("update_watchlist_data: news refresh failed: %s", exc)
+            report.news_failed.append(f"news: {exc}")
+
+        return report
+
     # -- Pipeline 2: run-analysis ------------------------------------------
 
     def run_analysis(

@@ -49,22 +49,23 @@ class LabelValue(BaseModel):
 
 
 class BulletWithCitation(BaseModel):
-    """A single bullet in strengths/risks, must reference a known source.
+    """A single bullet in strengths/risks, grounded by one or more sources.
 
-    ``citation`` must be one of:
+    Each entry in ``citations`` is one of:
     * ``metric:<key>`` — e.g. ``metric:revenue_yoy_pct``
     * ``news:<N>`` — N-th item in the rendered news block
     * ``fundamentals:<field>`` — e.g. ``fundamentals:pe_ratio``
     * ``thesis`` — the user's thesis text
     * ``portfolio:<field>`` — e.g. ``portfolio:unrealized_pnl_pct``
 
-    Unknown citations are stripped at validation time by the service.
+    Unknown citations are stripped at validation time by the service; a
+    bullet with no surviving citation is dropped entirely.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     text: str = Field(min_length=10, max_length=240)
-    citation: str = Field(min_length=3, max_length=80)
+    citations: list[str] = Field(min_length=1, max_length=4)
 
 
 class CalendarItem(BaseModel):
