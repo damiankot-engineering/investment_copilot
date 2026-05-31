@@ -16,6 +16,7 @@ frontend stops calling its endpoints.
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 from datetime import date, datetime, timedelta, timezone
 from typing import Sequence
@@ -27,6 +28,7 @@ from investment_copilot.domain.company_report import (
     CompanyReport,
     Kpi,
     LabelValue,
+    NewsHeadline,
 )
 from investment_copilot.domain.fundamentals import DividendEvent, FundamentalsSnapshot
 from investment_copilot.domain.models import NewsItem, normalize_ticker
@@ -39,7 +41,10 @@ from investment_copilot.domain.portfolio import (
 from investment_copilot.domain.prompts import (
     COMPANY_NARRATIVE_SYSTEM,
     COMPANY_NARRATIVE_USER_TEMPLATE,
+    NEWS_SENTIMENT_SYSTEM,
+    NEWS_SENTIMENT_USER_TEMPLATE,
     CompanyNarrative,
+    NewsSentimentBatch,
 )
 from investment_copilot.infrastructure.llm import LLMClient
 from investment_copilot.infrastructure.providers.base import ProviderError
@@ -53,12 +58,15 @@ logger = logging.getLogger(__name__)
 
 BR_CACHE_TTL: timedelta = timedelta(hours=24)
 DIVIDENDS_CACHE_TTL: timedelta = timedelta(days=7)
+# Sentiment of a fixed headline never changes — cache effectively forever.
+SENTIMENT_CACHE_TTL: timedelta = timedelta(days=3650)
 NEWS_DAYS_BACK: int = 30
 NEWS_TOP_N: int = 3
 WEEK52_TRADING_DAYS: int = 252
 FIVE_YEAR_TRADING_DAYS: int = 252 * 5
 REPORT_CACHE_KEY_PREFIX: str = "company_report:"
 DIVIDENDS_CACHE_KEY_PREFIX: str = "biznesradar:dividends:"
+SENTIMENT_CACHE_KEY_PREFIX: str = "news_sentiment:"
 
 
 class CompanyReportService:
@@ -101,12 +109,16 @@ class CompanyReportService:
         fundamentals = self._overlay_ohlcv(holding.ticker, fundamentals)
         fundamentals = self._overlay_dividend_yield(holding.ticker, fundamentals)
         news = self._load_news(holding.ticker)
+        # Read-only: surface whatever sentiment is already cached (no LLM call,
+        # so the factsheet stays instant). Unrated news render without a dot.
+        sentiment = self._cached_sentiment_map(news)
         return self._build_report(
             holding=holding,
             holding_status=holding_status,
             fundamentals=fundamentals,
             news=news,
             narrative=None,
+            sentiment_by_url=sentiment,
         )
 
     def generate_report(
@@ -124,6 +136,15 @@ class CompanyReportService:
         news = self._load_news(holding.ticker)
 
         warnings: list[str] = []
+
+        # Classify news sentiment (cheap model, cached per URL) BEFORE the
+        # narrative call so the sentiment tags can ground the analysis.
+        sentiment = self._classify_news_sentiment(news)
+
+        # Load the prior report (if any) so the model can frame a delta.
+        # Captured before _save_to_cache overwrites it below.
+        prior = self.get_cached_report(holding.ticker)
+
         narrative: CompanyNarrative | None
         try:
             narrative, dropped = self._call_llm_narrative(
@@ -131,6 +152,8 @@ class CompanyReportService:
                 holding_status=holding_status,
                 fundamentals=fundamentals,
                 news=news,
+                sentiment_by_url=sentiment,
+                prior=prior,
             )
             if dropped:
                 warnings.append(
@@ -147,6 +170,7 @@ class CompanyReportService:
             fundamentals=fundamentals,
             news=news,
             narrative=narrative,
+            sentiment_by_url=sentiment,
         )
         report = report.model_copy(update={"warnings": warnings})
         self._save_to_cache(holding.ticker, report)
@@ -322,6 +346,69 @@ class CompanyReportService:
             logger.warning("Failed to cache BR dividends for %s: %s", ticker, exc)
         return events
 
+    # ------------------------------------------------------- News sentiment
+
+    @staticmethod
+    def _sentiment_key(url: str) -> str:
+        digest = hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
+        return SENTIMENT_CACHE_KEY_PREFIX + digest
+
+    def _cached_sentiment_map(
+        self, news: Sequence[NewsItem]
+    ) -> dict[str, str]:
+        """Return ``{url: sentiment}`` for news already classified (no LLM)."""
+        out: dict[str, str] = {}
+        for n in news:
+            if not n.url:
+                continue
+            val = self._sqlite.cache_get(
+                self._sentiment_key(n.url), max_age=SENTIMENT_CACHE_TTL
+            )
+            if val:
+                out[n.url] = val
+        return out
+
+    def _classify_news_sentiment(
+        self, news: Sequence[NewsItem]
+    ) -> dict[str, str]:
+        """Classify sentiment for ``news``, reusing the cache and running ONE
+        cheap-model LLM call for the uncached remainder.
+
+        Sentiment of a fixed headline never changes, so it's cached per URL
+        effectively forever. Best-effort: a failed call leaves items
+        unrated (``None`` downstream) rather than faulting the report.
+        """
+        out = self._cached_sentiment_map(news)
+        uncached = [n for n in news if n.url and n.url not in out]
+        if not uncached:
+            return out
+
+        headlines = "\n".join(
+            f"{i}. {n.title}" for i, n in enumerate(uncached, start=1)
+        )
+        try:
+            batch: NewsSentimentBatch = self._llm.complete_structured(
+                system_prompt=NEWS_SENTIMENT_SYSTEM,
+                user_prompt=NEWS_SENTIMENT_USER_TEMPLATE.format(headlines=headlines),
+                response_schema=NewsSentimentBatch,
+                model=self._llm_cfg.model_summary,
+                temperature=0.0,
+                max_tokens=400,
+            )
+        except Exception as exc:  # noqa: BLE001 - sentiment is non-critical
+            logger.warning("News sentiment classification failed: %s", exc)
+            return out
+
+        by_index = {it.index: it.sentiment for it in batch.items}
+        for i, n in enumerate(uncached, start=1):
+            sentiment = by_index.get(i, "neutral")
+            out[n.url] = sentiment
+            try:
+                self._sqlite.cache_set(self._sentiment_key(n.url), sentiment)
+            except Exception as exc:  # pragma: no cover
+                logger.warning("Failed to cache sentiment for %s: %s", n.url, exc)
+        return out
+
     def _overlay_ohlcv(
         self,
         ticker: str,
@@ -400,17 +487,20 @@ class CompanyReportService:
         fundamentals: FundamentalsSnapshot | None,
         news: Sequence[NewsItem],
         narrative: CompanyNarrative | None,
+        sentiment_by_url: dict[str, str] | None = None,
     ) -> CompanyReport:
         # KPI grid (8 cells: 3 BR YoY + 5 price/portfolio/ratio)
         kpis = self._build_kpis(fundamentals, holding_status)
         market = self._build_market(fundamentals, holding, holding_status)
         calendar = self._build_calendar(fundamentals)
+        news_section = _build_news_section(news, sentiment_by_url or {})
         period_label = (
             fundamentals.latest_quarter_label
             if fundamentals and fundamentals.latest_quarter_label
             else "Ostatni okres"
         )
 
+        change_since_last: str | None = None
         if narrative is None:
             tldr = (
                 "Brak analizy AI dla tej spółki. Kliknij 'Generuj raport AI' "
@@ -421,6 +511,7 @@ class CompanyReportService:
             confidence = 0
         else:
             tldr = narrative.tldr
+            change_since_last = narrative.change_since_last
             strengths = [
                 BulletWithCitation(text=b.text, citations=list(b.citations))
                 for b in narrative.strengths
@@ -437,9 +528,11 @@ class CompanyReportService:
             report_date=date.today().isoformat(),
             sector=fundamentals.sector if fundamentals else None,
             tldr=tldr,
+            change_since_last=change_since_last,
             kpi_section_title=f"Kluczowe wskaźniki · {period_label}",
             kpis=kpis,
             market=market,
+            news=news_section,
             strengths=strengths,
             risks=risks,
             calendar=calendar,
@@ -658,6 +751,8 @@ class CompanyReportService:
         holding_status: HoldingStatus | None,
         fundamentals: FundamentalsSnapshot | None,
         news: Sequence[NewsItem],
+        sentiment_by_url: dict[str, str] | None = None,
+        prior: CompanyReport | None = None,
     ) -> tuple[CompanyNarrative, list[str]]:
         """Run the narrative LLM call and validate citations.
 
@@ -669,6 +764,8 @@ class CompanyReportService:
             holding_status=holding_status,
             fundamentals=fundamentals,
             news=news,
+            sentiment_by_url=sentiment_by_url or {},
+            prior=prior,
         )
         user_prompt = COMPANY_NARRATIVE_USER_TEMPLATE.format(
             ticker=holding.ticker, context=context_md,
@@ -741,18 +838,65 @@ def _fmt_mcap(mcap: float) -> str:
     return f"{mcap:,.0f} PLN".replace(",", " ")
 
 
+_SENTIMENT_LABEL = {
+    "positive": "POZYTYWNY",
+    "negative": "NEGATYWNY",
+    "neutral": "neutralny",
+}
+
+
+def _build_news_section(
+    news: Sequence[NewsItem],
+    sentiment_by_url: dict[str, str],
+) -> list[NewsHeadline]:
+    """Convert raw NewsItems into the report's news section with sentiment."""
+    out: list[NewsHeadline] = []
+    for n in news:
+        s = sentiment_by_url.get(n.url) if n.url else None
+        out.append(NewsHeadline(
+            title=n.title[:240],
+            date=n.published_at.strftime("%Y-%m-%d"),
+            source=n.source or "",
+            url=n.url,
+            sentiment=s if s in ("positive", "negative", "neutral") else None,
+        ))
+    return out
+
+
+def _render_prior_block(prior: CompanyReport | None) -> list[str]:
+    """Compact carry-over from the previous AI report for delta framing."""
+    if prior is None or not prior.tldr or prior.confidence <= 0:
+        return []
+    lines = [
+        "## Poprzedni raport AI (do porównania — wskaż zmianę)",
+        f"_Z dnia {prior.report_date} · confidence {prior.confidence}/10._",
+        f"- Poprzednie TL;DR: {prior.tldr.strip()}",
+    ]
+    if prior.risks:
+        lines.append("- Poprzednie ryzyka:")
+        for r in prior.risks[:4]:
+            lines.append(f"  • {r.text.strip()}")
+    lines.append(
+        "_Wypełnij `change_since_last`: co się zmieniło względem powyższego._"
+    )
+    return lines
+
+
 def _render_narrative_context(
     *,
     holding: Holding,
     holding_status: HoldingStatus | None,
     fundamentals: FundamentalsSnapshot | None,
     news: Sequence[NewsItem],
+    sentiment_by_url: dict[str, str] | None = None,
+    prior: CompanyReport | None = None,
 ) -> tuple[set[str], str]:
     """Render the per-ticker context as Markdown + the set of valid citation keys.
 
     The LLM sees the Markdown; the service uses the citation set to strip
     unverified references after the call returns.
     """
+    sentiment_by_url = sentiment_by_url or {}
     registry: set[str] = {"thesis"}
     lines: list[str] = [f"# {holding.ticker} ({holding.name or '—'})", ""]
 
@@ -843,12 +987,14 @@ def _render_narrative_context(
                 f"(za {days} dni)"
             )
 
-    # News
+    # News (with sentiment tag when classified)
     for idx, n in enumerate(news, start=1):
         key = f"news:{idx}"
         registry.add(key)
         when = n.published_at.strftime("%Y-%m-%d")
-        src_lines.append(f"- `{key}` ({when}, {n.source}): {n.title}")
+        sent = sentiment_by_url.get(n.url) if n.url else None
+        tag = f" [{_SENTIMENT_LABEL[sent]}]" if sent in _SENTIMENT_LABEL else ""
+        src_lines.append(f"- `{key}` ({when}, {n.source}){tag}: {n.title}")
 
     if not src_lines:
         lines.append("_(brak metryk i newsów — bazuj wyłącznie na tezie)_")
@@ -858,5 +1004,11 @@ def _render_narrative_context(
     lines.append("")
     lines.append("## Dozwolone wartości `citation`")
     lines.append("Tylko klucze wymienione powyżej. Inne zostaną odrzucone.")
+
+    # Prior report carry-over for delta framing (change_since_last).
+    prior_block = _render_prior_block(prior)
+    if prior_block:
+        lines.append("")
+        lines.extend(prior_block)
 
     return registry, "\n".join(lines)

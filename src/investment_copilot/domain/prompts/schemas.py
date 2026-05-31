@@ -521,8 +521,49 @@ class CompanyNarrative(BaseModel):
         max_length=5,
         description="3-5 ryzyk, każde z citation kluczem.",
     )
+    change_since_last: str | None = Field(
+        default=None,
+        max_length=400,
+        description=(
+            "2-3 zdania: co zmieniło się od poprzedniego raportu (sekcja "
+            "'Poprzedni raport AI' w kontekście). Wskaż czy ryzyka się "
+            "zmaterializowały/cofnęły, czy teza się umocniła/osłabiła. "
+            "Null TYLKO gdy brak poprzedniego raportu w kontekście."
+        ),
+    )
     confidence: int = Field(
         ge=1,
         le=10,
         description="7-9 gdy są BR YoY + min. 2 świeże news; 4-6 gdy braki.",
+    )
+
+
+# --- News sentiment (batch classification) ---------------------------------
+
+
+class NewsSentimentItem(BaseModel):
+    """Sentiment verdict for one numbered news headline."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    index: int = Field(
+        ge=1,
+        description="1-based index matching the numbered headline in the prompt.",
+    )
+    sentiment: Literal["positive", "negative", "neutral"] = Field(
+        description=(
+            "Wydźwięk dla akcjonariusza: 'positive' (wzrost/rekord/zysk/"
+            "kontrakt/dywidenda), 'negative' (spadek/strata/pozew/odpis/"
+            "rezygnacja), 'neutral' (czysto informacyjne lub niejednoznaczne)."
+        ),
+    )
+
+
+class NewsSentimentBatch(BaseModel):
+    """Sentiment verdicts for a batch of headlines, one per index."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[NewsSentimentItem] = Field(
+        description="Dokładnie jeden wpis na każdy ponumerowany tytuł z promptu.",
     )

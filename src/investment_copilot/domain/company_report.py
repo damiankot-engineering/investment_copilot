@@ -82,6 +82,26 @@ class CalendarItem(BaseModel):
     text: str = Field(min_length=1, max_length=200)
 
 
+Sentiment = Literal["positive", "negative", "neutral"]
+
+
+class NewsHeadline(BaseModel):
+    """One recent news/ESPI item shown in the factsheet news section.
+
+    ``sentiment`` is ``None`` until the per-ticker AI report runs (and the
+    batch sentiment LLM call classifies + caches it per URL). The factsheet
+    renders unrated items without a coloured dot.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=240)
+    date: str = Field(min_length=1, max_length=20)
+    source: str = Field(default="", max_length=40)
+    url: str | None = Field(default=None, max_length=400)
+    sentiment: Sentiment | None = None
+
+
 class CompanyReport(BaseModel):
     """The single-company snapshot report.
 
@@ -103,12 +123,18 @@ class CompanyReport(BaseModel):
     # --- Streszczenie ------------------------------------------------------
     tldr: str = Field(min_length=20, max_length=600)
 
+    # --- Zmiana vs poprzedni raport (LLM, gdy jest prior) ------------------
+    change_since_last: str | None = Field(default=None, max_length=400)
+
     # --- KPI grid ----------------------------------------------------------
     kpi_section_title: str = Field(min_length=1, max_length=80)
     kpis: list[Kpi] = Field(min_length=4, max_length=8)
 
     # --- Dane rynkowe ------------------------------------------------------
     market: list[LabelValue] = Field(default_factory=list, max_length=12)
+
+    # --- Newsy (Top 3, z sentymentem gdy sklasyfikowane) ------------------
+    news: list[NewsHeadline] = Field(default_factory=list, max_length=5)
 
     # --- Mocne / Ryzyka ----------------------------------------------------
     strengths: list[BulletWithCitation] = Field(default_factory=list, max_length=6)

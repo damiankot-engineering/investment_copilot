@@ -237,5 +237,31 @@ COMPANY_NARRATIVE_USER_TEMPLATE: Final[str] = (
     "`[\"metric:revenue_yoy_pct\", \"news:2\"]`).\n"
     " - 'risks': 3-5 ryzyk; KAŻDE z `citations` (lista, min. 2 gdy "
     "dostępne).\n"
+    " - 'change_since_last': jeśli kontekst zawiera sekcję 'Poprzedni "
+    "raport AI' — 2-3 zdania o tym, co się zmieniło (ryzyka zmaterializowane/"
+    "cofnięte, teza mocniejsza/słabsza, nowy sentyment newsów). Jeśli braku "
+    "poprzedniego raportu — null.\n"
     " - 'confidence': 1-10.\n"
+)
+
+
+# --- News sentiment batch classification -----------------------------------
+
+NEWS_SENTIMENT_SYSTEM: Final[str] = (
+    "Jesteś klasyfikatorem wydźwięku nagłówków giełdowych GPW dla inwestora. "
+    "Dla KAŻDEGO ponumerowanego tytułu zwróć sentyment z perspektywy "
+    "akcjonariusza spółki:\n"
+    "• 'positive' — wzrost wyników, rekord, nowy kontrakt/umowa, wyższa "
+    "dywidenda, skup akcji, pozytywna rekomendacja.\n"
+    "• 'negative' — spadek wyników, strata, odpis, pozew, rezygnacja "
+    "zarządu, emisja rozwadniająca, obniżka rekomendacji, opóźnienie.\n"
+    "• 'neutral' — czysto informacyjne, proceduralne (terminy, zwołanie WZA) "
+    "lub niejednoznaczne.\n\n"
+    "Zwróć DOKŁADNIE jeden wpis na każdy numer. Nie wymyślaj tytułów."
+)
+
+NEWS_SENTIMENT_USER_TEMPLATE: Final[str] = (
+    "Sklasyfikuj wydźwięk poniższych nagłówków:\n\n{headlines}\n\n"
+    "Zwróć JSON `NewsSentimentBatch` z polem 'items' — jeden obiekt "
+    "{{index, sentiment}} na każdy numer."
 )

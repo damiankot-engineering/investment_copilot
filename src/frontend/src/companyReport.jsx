@@ -133,6 +133,57 @@ function SectionHeading({ num, title }) {
   );
 }
 
+const SENTIMENT_META = {
+  positive: { color: 'bg-accent-green', ring: 'ring-accent-green/30', label: 'pozytywny' },
+  negative: { color: 'bg-accent-red',   ring: 'ring-accent-red/30',   label: 'negatywny' },
+  neutral:  { color: 'bg-white/30',     ring: 'ring-white/10',        label: 'neutralny' },
+};
+
+function SentimentDot({ sentiment }) {
+  const meta = SENTIMENT_META[sentiment];
+  if (!meta) {
+    return (
+      <span title="nieoceniony" className="inline-block h-2 w-2 rounded-full border border-white/20 shrink-0" />
+    );
+  }
+  return (
+    <span
+      title={meta.label}
+      className={`inline-block h-2 w-2 rounded-full shrink-0 ring-2 ${meta.color} ${meta.ring}`}
+    />
+  );
+}
+
+function NewsList({ items }) {
+  if (!items?.length) {
+    return <div className="text-[12px] text-white/40 italic px-1 py-1">Brak newsów w cache.</div>;
+  }
+  return (
+    <ul className="flex flex-col">
+      {items.map((n, i) => (
+        <li
+          key={i}
+          className="flex items-start gap-2.5 py-2 border-b border-dotted border-white/[0.06] last:border-b-0"
+        >
+          <span className="mt-1.5"><SentimentDot sentiment={n.sentiment} /></span>
+          <div className="flex-1 min-w-0">
+            <div className="text-[12.5px] text-white/85 leading-snug">
+              {n.url ? (
+                <a href={n.url} target="_blank" rel="noopener" className="hover:text-accent-cyan transition-colors">
+                  {n.title}
+                </a>
+              ) : n.title}
+            </div>
+            <div className="mono text-[10.5px] text-white/40 mt-0.5">
+              {n.date}{n.source ? ` · ${n.source}` : ''}
+            </div>
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function CompanyReport({ report, isFactsheet }) {
   if (!report) return null;
   return (
@@ -148,6 +199,14 @@ function CompanyReport({ report, isFactsheet }) {
         {isFactsheet && (
           <div className="mt-2 text-[11.5px] text-white/40 italic">
             Streszczenie generowane przez AI — kliknij „Generuj raport AI".
+          </div>
+        )}
+        {report.change_since_last && (
+          <div className="mt-3 rounded-lg border border-accent-cyan/20 bg-accent-cyan/[0.04] px-3.5 py-2.5">
+            <div className="mono text-[9.5px] uppercase tracking-[0.16em] text-accent-cyan/80 mb-1">
+              Zmiana vs poprzedni raport
+            </div>
+            <p className="text-[12.5px] text-white/80 leading-relaxed">{report.change_since_last}</p>
           </div>
         )}
       </div>
@@ -169,9 +228,17 @@ function CompanyReport({ report, isFactsheet }) {
         </div>
       )}
 
-      {/* 04 · Strengths vs risks */}
+      {/* 04 · News */}
+      {report.news?.length > 0 && (
+        <div>
+          <SectionHeading num="04" title="Najnowsze newsy" />
+          <NewsList items={report.news} />
+        </div>
+      )}
+
+      {/* 05 · Strengths vs risks */}
       <div>
-        <SectionHeading num="04" title="Mocne strony vs. ryzyka" />
+        <SectionHeading num="05" title="Mocne strony vs. ryzyka" />
         <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4">
           <div>
             <h4 className="font-serif text-[12.5px] uppercase tracking-[0.06em] text-white/65 mb-1.5">
@@ -196,10 +263,10 @@ function CompanyReport({ report, isFactsheet }) {
         </div>
       </div>
 
-      {/* 05 · Calendar */}
+      {/* 06 · Calendar */}
       {report.calendar?.length > 0 && (
         <div>
-          <SectionHeading num="05" title="Kalendarz" />
+          <SectionHeading num="06" title="Kalendarz" />
           <BulletList items={report.calendar} kind="calendar" />
         </div>
       )}
