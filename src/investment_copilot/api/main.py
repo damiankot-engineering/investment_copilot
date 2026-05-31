@@ -829,6 +829,17 @@ def create_app() -> FastAPI:
         )
         return portfolio, status_obj
 
+    async def _load_watchlist_opt(wl_path: Path) -> Watchlist | None:
+        """Load the watchlist, or ``None`` if the file is missing/invalid.
+
+        Lets per-company endpoints resolve a ticker that lives on the
+        watchlist rather than in the portfolio.
+        """
+        try:
+            return await asyncio.to_thread(load_watchlist, str(wl_path))
+        except WatchlistError:
+            return None
+
     @app.get(
         "/api/companies/{ticker}/factsheet",
         response_model=CompanyReport,
@@ -837,20 +848,23 @@ def create_app() -> FastAPI:
     async def get_company_factsheet(
         ticker: str,
         pf_path: Annotated[Path, Depends(get_portfolio_path)],
+        wl_path: Annotated[Path, Depends(get_watchlist_path)],
         container: Annotated[ServiceContainer, Depends(get_container)],
     ) -> CompanyReport:
         """Deterministic per-company snapshot (no LLM call).
 
+        Resolves the ticker against the portfolio first, then the watchlist.
         Fast (<1s typical) — fundamentals come from 24h BR cache, OHLCV
         and news from the local SQLite/parquet stores. tldr/strengths/
         risks are placeholder strings until ``POST /report`` runs the LLM.
         """
         norm = _norm_ticker(ticker)
         portfolio, status_obj = await _load_pf_and_status(pf_path, container)
+        watchlist = await _load_watchlist_opt(wl_path)
         try:
             return await asyncio.to_thread(
                 container.company_report_service.build_factsheet,
-                portfolio, status_obj, ticker=norm,
+                portfolio, status_obj, ticker=norm, watchlist=watchlist,
             )
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc))
@@ -878,15 +892,20 @@ def create_app() -> FastAPI:
     async def generate_company_report(
         ticker: str,
         pf_path: Annotated[Path, Depends(get_portfolio_path)],
+        wl_path: Annotated[Path, Depends(get_watchlist_path)],
         container: Annotated[ServiceContainer, Depends(get_container)],
     ) -> CompanyReport:
-        """Run the LLM narrative call and persist + return the full report."""
+        """Run the LLM narrative call and persist + return the full report.
+
+        Resolves the ticker against the portfolio first, then the watchlist.
+        """
         norm = _norm_ticker(ticker)
         portfolio, status_obj = await _load_pf_and_status(pf_path, container)
+        watchlist = await _load_watchlist_opt(wl_path)
         try:
             return await asyncio.to_thread(
                 container.company_report_service.generate_report,
-                portfolio, status_obj, ticker=norm,
+                portfolio, status_obj, ticker=norm, watchlist=watchlist,
             )
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc))
@@ -901,10 +920,13 @@ def create_app() -> FastAPI:
     async def download_company_report_html(
         ticker: str,
         pf_path: Annotated[Path, Depends(get_portfolio_path)],
+        wl_path: Annotated[Path, Depends(get_watchlist_path)],
         container: Annotated[ServiceContainer, Depends(get_container)],
     ) -> HTMLResponse:
         """Standalone HTML download — uses the cached AI report when present,
-        otherwise falls back to the deterministic factsheet (no LLM call)."""
+        otherwise falls back to the deterministic factsheet (no LLM call).
+
+        Resolves the ticker against the portfolio first, then the watchlist."""
         import json as _json
 
         norm = _norm_ticker(ticker)
@@ -913,10 +935,11 @@ def create_app() -> FastAPI:
         )
         if report is None:
             portfolio, status_obj = await _load_pf_and_status(pf_path, container)
+            watchlist = await _load_watchlist_opt(wl_path)
             try:
                 report = await asyncio.to_thread(
                     container.company_report_service.build_factsheet,
-                    portfolio, status_obj, ticker=norm,
+                    portfolio, status_obj, ticker=norm, watchlist=watchlist,
                 )
             except ValueError as exc:
                 raise HTTPException(status_code=404, detail=str(exc))

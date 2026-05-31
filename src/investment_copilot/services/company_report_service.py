@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import hashlib
 import logging
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Sequence
 
@@ -39,6 +40,7 @@ from investment_copilot.domain.portfolio import (
     Portfolio,
     PortfolioStatus,
 )
+from investment_copilot.domain.watchlist import Watchlist
 from investment_copilot.domain.prompts import (
     COMPANY_NARRATIVE_SYSTEM,
     COMPANY_NARRATIVE_USER_TEMPLATE,
@@ -70,6 +72,25 @@ DIVIDENDS_CACHE_KEY_PREFIX: str = "biznesradar:dividends:"
 SENTIMENT_CACHE_KEY_PREFIX: str = "news_sentiment:"
 
 
+@dataclass(frozen=True)
+class ReportSubject:
+    """The entity a report is about — a portfolio holding OR a watchlist item.
+
+    Decouples report assembly from :class:`Holding`. A watchlist subject has
+    no position (``holding=None``), so the market section skips PnL/cost-basis
+    lines and the narrative omits ``portfolio:*`` citations. ``thesis`` carries
+    the holding's investment thesis or, for a watchlist item, its research
+    notes; ``thesis_source`` labels which file it came from.
+    """
+
+    ticker: str
+    name: str | None
+    thesis: str
+    thesis_source: str  # "portfolio.yaml" | "watchlist.yaml"
+    news_identifiers: tuple[str, ...]
+    holding: Holding | None  # position details for the market section
+
+
 class CompanyReportService:
     """Builds per-company snapshot reports (deterministic + LLM narrative)."""
 
@@ -98,23 +119,26 @@ class CompanyReportService:
         status: PortfolioStatus,
         *,
         ticker: str,
+        watchlist: Watchlist | None = None,
     ) -> CompanyReport:
         """Return a CompanyReport with deterministic sections filled.
 
-        TL;DR / strengths / risks are populated with placeholders so the
-        UI can render the card immediately. Call :meth:`generate_report`
-        to add the LLM-generated narrative.
+        Resolves ``ticker`` against the portfolio first, then ``watchlist``
+        (if given). TL;DR / strengths / risks are placeholders until
+        :meth:`generate_report` runs the LLM narrative.
         """
-        holding, holding_status = self._lookup(portfolio, status, ticker)
-        fundamentals = self._fetch_fundamentals_cached(holding.ticker)
-        fundamentals = self._overlay_ohlcv(holding.ticker, fundamentals)
-        fundamentals = self._overlay_dividend_yield(holding.ticker, fundamentals)
-        news = self._load_news(holding.ticker, holding.news_identifiers)
+        subject, holding_status = self._resolve_subject(
+            portfolio, status, watchlist, ticker
+        )
+        fundamentals = self._fetch_fundamentals_cached(subject.ticker)
+        fundamentals = self._overlay_ohlcv(subject.ticker, fundamentals)
+        fundamentals = self._overlay_dividend_yield(subject.ticker, fundamentals)
+        news = self._load_news(subject.ticker, list(subject.news_identifiers))
         # Read-only: surface whatever sentiment is already cached (no LLM call,
         # so the factsheet stays instant). Unrated news render without a dot.
         sentiment = self._cached_sentiment_map(news)
         return self._build_report(
-            holding=holding,
+            subject=subject,
             holding_status=holding_status,
             fundamentals=fundamentals,
             news=news,
@@ -128,13 +152,16 @@ class CompanyReportService:
         status: PortfolioStatus,
         *,
         ticker: str,
+        watchlist: Watchlist | None = None,
     ) -> CompanyReport:
         """Build factsheet + run the LLM narrative call + persist."""
-        holding, holding_status = self._lookup(portfolio, status, ticker)
-        fundamentals = self._fetch_fundamentals_cached(holding.ticker)
-        fundamentals = self._overlay_ohlcv(holding.ticker, fundamentals)
-        fundamentals = self._overlay_dividend_yield(holding.ticker, fundamentals)
-        news = self._load_news(holding.ticker, holding.news_identifiers)
+        subject, holding_status = self._resolve_subject(
+            portfolio, status, watchlist, ticker
+        )
+        fundamentals = self._fetch_fundamentals_cached(subject.ticker)
+        fundamentals = self._overlay_ohlcv(subject.ticker, fundamentals)
+        fundamentals = self._overlay_dividend_yield(subject.ticker, fundamentals)
+        news = self._load_news(subject.ticker, list(subject.news_identifiers))
 
         warnings: list[str] = []
 
@@ -144,12 +171,12 @@ class CompanyReportService:
 
         # Load the prior report (if any) so the model can frame a delta.
         # Captured before _save_to_cache overwrites it below.
-        prior = self.get_cached_report(holding.ticker)
+        prior = self.get_cached_report(subject.ticker)
 
         narrative: CompanyNarrative | None
         try:
             narrative, dropped = self._call_llm_narrative(
-                holding=holding,
+                subject=subject,
                 holding_status=holding_status,
                 fundamentals=fundamentals,
                 news=news,
@@ -161,12 +188,12 @@ class CompanyReportService:
                     f"Odrzucone cytowania bez źródła: {', '.join(dropped[:5])}"
                 )
         except Exception as exc:  # noqa: BLE001 - degrade gracefully
-            logger.warning("LLM narrative failed for %s: %s", holding.ticker, exc)
+            logger.warning("LLM narrative failed for %s: %s", subject.ticker, exc)
             warnings.append(f"LLM nie wygenerował narracji: {exc}")
             narrative = None
 
         report = self._build_report(
-            holding=holding,
+            subject=subject,
             holding_status=holding_status,
             fundamentals=fundamentals,
             news=news,
@@ -174,7 +201,7 @@ class CompanyReportService:
             sentiment_by_url=sentiment,
         )
         report = report.model_copy(update={"warnings": warnings})
-        self._save_to_cache(holding.ticker, report)
+        self._save_to_cache(subject.ticker, report)
         return report
 
     def get_cached_report(self, ticker: str) -> CompanyReport | None:
@@ -288,17 +315,59 @@ class CompanyReportService:
 
     # --------------------------------------------------------------- Internal
 
-    def _lookup(
-        self, portfolio: Portfolio, status: PortfolioStatus, ticker: str,
-    ) -> tuple[Holding, HoldingStatus | None]:
+    def _resolve_subject(
+        self,
+        portfolio: Portfolio,
+        status: PortfolioStatus,
+        watchlist: Watchlist | None,
+        ticker: str,
+    ) -> tuple[ReportSubject, HoldingStatus | None]:
+        """Resolve ``ticker`` to a :class:`ReportSubject` (+ position status).
+
+        Portfolio holdings win; a ticker absent there is looked up in
+        ``watchlist`` (when provided). Raises ``ValueError`` if found in
+        neither — the API turns that into a 404.
+        """
         norm = normalize_ticker(ticker)
         holding = portfolio.find(norm)
-        if holding is None:
-            raise ValueError(f"Ticker {ticker!r} not found in portfolio")
-        hs = next(
-            (s for s in status.holdings if s.ticker.lower() == norm.lower()), None
+        if holding is not None:
+            hs = next(
+                (s for s in status.holdings if s.ticker.lower() == norm.lower()),
+                None,
+            )
+            return (
+                ReportSubject(
+                    ticker=holding.ticker,
+                    name=holding.name,
+                    thesis=holding.thesis,
+                    thesis_source="portfolio.yaml",
+                    news_identifiers=tuple(holding.news_identifiers),
+                    holding=holding,
+                ),
+                hs,
+            )
+
+        if watchlist is not None:
+            item = next(
+                (it for it in watchlist.items if it.ticker.lower() == norm.lower()),
+                None,
+            )
+            if item is not None:
+                return (
+                    ReportSubject(
+                        ticker=item.ticker,
+                        name=item.name,
+                        thesis=(item.notes or "").strip(),
+                        thesis_source="watchlist.yaml",
+                        news_identifiers=tuple(item.news_identifiers),
+                        holding=None,
+                    ),
+                    None,
+                )
+
+        raise ValueError(
+            f"Ticker {ticker!r} not found in portfolio or watchlist"
         )
-        return holding, hs
 
     def _fetch_fundamentals_cached(
         self, ticker: str
@@ -477,16 +546,15 @@ class CompanyReportService:
         since = datetime.now(timezone.utc) - timedelta(days=NEWS_DAYS_BACK)
         items = self._data.load_news(ticker=ticker, since=since)
         # Relevance safety-net: re-apply the company-identity filter at read
-        # time. Rows stamped under the old broad-keyword matcher (e.g. generic
-        # "akcje" news tagged onto XTB) are dropped here immediately, without
-        # needing to purge or re-refresh the news table.
+        # time, matching the HEADLINE only. Rows stamped under the old
+        # broad-keyword matcher (generic "akcje" news tagged onto XTB) and
+        # quoted-source name-drops (a company named only in the summary, e.g.
+        # "...analityk XTB" in an article about something else) are both
+        # dropped here immediately, without purging or re-refreshing the table.
         if identifiers:
             matcher = compile_identity_matcher(identifiers)
             if matcher is not None:
-                items = [
-                    n for n in items
-                    if matcher.search((n.title or "") + " " + (n.summary or ""))
-                ]
+                items = [n for n in items if matcher.search(n.title or "")]
         # Sort desc by date so news:1 is freshest
         items.sort(key=lambda n: n.published_at, reverse=True)
         return items[:NEWS_TOP_N]
@@ -496,7 +564,7 @@ class CompanyReportService:
     def _build_report(
         self,
         *,
-        holding: Holding,
+        subject: ReportSubject,
         holding_status: HoldingStatus | None,
         fundamentals: FundamentalsSnapshot | None,
         news: Sequence[NewsItem],
@@ -505,7 +573,7 @@ class CompanyReportService:
     ) -> CompanyReport:
         # KPI grid (8 cells: 3 BR YoY + 5 price/portfolio/ratio)
         kpis = self._build_kpis(fundamentals, holding_status)
-        market = self._build_market(fundamentals, holding, holding_status)
+        market = self._build_market(fundamentals, subject, holding_status)
         calendar = self._build_calendar(fundamentals)
         news_section = _build_news_section(news, sentiment_by_url or {})
         period_label = (
@@ -537,8 +605,8 @@ class CompanyReportService:
             confidence = narrative.confidence
 
         return CompanyReport(
-            company_name=holding.name or holding.ticker.upper(),
-            ticker=holding.ticker,
+            company_name=subject.name or subject.ticker.upper(),
+            ticker=subject.ticker,
             report_date=date.today().isoformat(),
             sector=fundamentals.sector if fundamentals else None,
             tldr=tldr,
@@ -631,9 +699,10 @@ class CompanyReportService:
     def _build_market(
         self,
         f: FundamentalsSnapshot | None,
-        h: Holding,
+        subject: ReportSubject,
         hs: HoldingStatus | None,
     ) -> list[LabelValue]:
+        h = subject.holding  # None for watchlist subjects (no position)
         items: list[LabelValue] = []
         # Cena (with date)
         last_price = (hs.last_price if hs and hs.has_price else None) or (
@@ -674,28 +743,29 @@ class CompanyReportService:
         # Sektor
         if f and f.sector:
             items.append(LabelValue(label="Sektor", value=f.sector))
-        # Liczba akcji w portfelu
-        n_tx = len(h.transactions)
-        tx_suffix = f" · {n_tx} transakcji" if n_tx > 1 else ""
-        items.append(LabelValue(
-            label="W portfelu",
-            value=(
-                f"{h.shares:g} szt. · avg {h.avg_entry_price:.2f} "
-                f"(od {h.first_entry_date.isoformat()}){tx_suffix}"
-            ),
-        ))
-        # PnL absolute
-        if hs and hs.has_price:
+        # Position lines — only for portfolio holdings (watchlist has none).
+        if h is not None:
+            n_tx = len(h.transactions)
+            tx_suffix = f" · {n_tx} transakcji" if n_tx > 1 else ""
             items.append(LabelValue(
-                label="Wartość pozycji / PnL",
+                label="W portfelu",
                 value=(
-                    f"{hs.market_value:,.2f} PLN  "
-                    f"({hs.unrealized_pnl:+,.0f} PLN, "
-                    f"{hs.unrealized_pnl_pct * 100:+.2f}%)"
+                    f"{h.shares:g} szt. · avg {h.avg_entry_price:.2f} "
+                    f"(od {h.first_entry_date.isoformat()}){tx_suffix}"
                 ),
             ))
+            # PnL absolute
+            if hs and hs.has_price:
+                items.append(LabelValue(
+                    label="Wartość pozycji / PnL",
+                    value=(
+                        f"{hs.market_value:,.2f} PLN  "
+                        f"({hs.unrealized_pnl:+,.0f} PLN, "
+                        f"{hs.unrealized_pnl_pct * 100:+.2f}%)"
+                    ),
+                ))
         # 5-letnia stopa zwrotu (z OHLCV jeśli mamy dość historii)
-        five_y = self._compute_5y_return(h.ticker)
+        five_y = self._compute_5y_return(subject.ticker)
         if five_y is not None:
             items.append(LabelValue(
                 label="5-letni zwrot",
@@ -761,7 +831,7 @@ class CompanyReportService:
     def _call_llm_narrative(
         self,
         *,
-        holding: Holding,
+        subject: ReportSubject,
         holding_status: HoldingStatus | None,
         fundamentals: FundamentalsSnapshot | None,
         news: Sequence[NewsItem],
@@ -774,7 +844,7 @@ class CompanyReportService:
         key isn't in the registry are removed from the narrative.
         """
         registry, context_md = _render_narrative_context(
-            holding=holding,
+            subject=subject,
             holding_status=holding_status,
             fundamentals=fundamentals,
             news=news,
@@ -782,7 +852,7 @@ class CompanyReportService:
             prior=prior,
         )
         user_prompt = COMPANY_NARRATIVE_USER_TEMPLATE.format(
-            ticker=holding.ticker, context=context_md,
+            ticker=subject.ticker, context=context_md,
         )
         result: CompanyNarrative = self._llm.complete_structured(
             system_prompt=COMPANY_NARRATIVE_SYSTEM,
@@ -898,7 +968,7 @@ def _render_prior_block(prior: CompanyReport | None) -> list[str]:
 
 def _render_narrative_context(
     *,
-    holding: Holding,
+    subject: ReportSubject,
     holding_status: HoldingStatus | None,
     fundamentals: FundamentalsSnapshot | None,
     news: Sequence[NewsItem],
@@ -912,11 +982,15 @@ def _render_narrative_context(
     """
     sentiment_by_url = sentiment_by_url or {}
     registry: set[str] = {"thesis"}
-    lines: list[str] = [f"# {holding.ticker} ({holding.name or '—'})", ""]
+    lines: list[str] = [f"# {subject.ticker} ({subject.name or '—'})", ""]
 
-    # Teza inwestycyjna
-    lines.append("## Teza inwestycyjna (źródło: portfolio.yaml)")
-    lines.append(holding.thesis.strip())
+    # Teza inwestycyjna / notatki badawcze (watchlist)
+    label = (
+        "Teza inwestycyjna" if subject.holding is not None
+        else "Notatki badawcze (spółka z watchlisty — brak pozycji)"
+    )
+    lines.append(f"## {label} (źródło: {subject.thesis_source})")
+    lines.append(subject.thesis.strip() or "_(brak — bazuj na danych poniżej)_")
     lines.append("")
 
     # Dostępne źródła

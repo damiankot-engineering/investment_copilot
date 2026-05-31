@@ -167,11 +167,12 @@ function App() {
   // Render all tabs persistently and toggle visibility, so each tab keeps
   // its own state (backtest results, AI analysis, monitoring snapshot, etc.)
   // across tab switches. Only the entrance animation runs once per tab.
+  // 'analysis' (Analiza AI / <AnalysisTab/>) is intentionally not mounted —
+  // hidden from the UI per request. analysis.jsx + its backend stay in place.
   const tabs = [
     { id: 'portfolio',  node: <PortfolioTab portfolio={portfolio} onUpdatePortfolio={onUpdatePortfolio} onRefresh={onRefresh} refreshing={refreshing} refreshProgress={refreshProgress} benchmarkLabel={appConfig.benchmark_label} /> },
     { id: 'watchlist',  node: <WatchlistTab /> },
     { id: 'backtest',   node: <BacktestTab /> },
-    { id: 'analysis',   node: <AnalysisTab /> },
     { id: 'reports',    node: <ReportsTab /> },
     { id: 'monitoring', node: <MonitoringTab /> },
   ];

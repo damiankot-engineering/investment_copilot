@@ -4,11 +4,12 @@ Configured with a list of feed URLs. Per call, fetches each feed, applies
 ``since`` and (optional) keyword filtering, and returns a flat
 :class:`~investment_copilot.domain.models.NewsItem` list.
 
-Keyword matching is case-insensitive **word-boundary** matching on title +
-summary (see :mod:`investment_copilot.domain.news_match`). The terms passed in
-are company *identifiers* (ticker stem + brand name), so a headline is kept
-only when it actually names the company — not when it merely shares a sector
-term like "akcje" or "e-commerce".
+Keyword matching is case-insensitive **word-boundary** matching on the
+**headline** (see :mod:`investment_copilot.domain.news_match`). The terms
+passed in are company *identifiers* (ticker stem + brand name), so an item is
+kept only when its title actually names the company — not when it merely
+shares a sector term like "akcje"/"e-commerce", and not when the company is
+only name-dropped in the summary (e.g. a quoted analyst's employer).
 """
 
 from __future__ import annotations
@@ -78,7 +79,11 @@ class RSSProvider:
                 if not title or not link:
                     continue
 
-                if not matches_identity(title + " " + (summary or ""), matcher):
+                # Match identity in the HEADLINE only. Genuine company news
+                # names the company in the title; a summary match is usually a
+                # quoted-source name-drop (e.g. "...analityk XTB" in an article
+                # about something else), which is noise we don't want.
+                if not matches_identity(title, matcher):
                     continue
 
                 results.append(

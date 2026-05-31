@@ -2,19 +2,120 @@
 
 const { motion: WMot } = window.Motion;
 
-function WatchlistRow({ item, i }) {
+// Per-ticker monitoring report shown when a watchlist row is expanded.
+// Reuses the same ticker-based company endpoints as Monitoring; the backend
+// resolves the ticker against the watchlist (no position → no PnL section).
+function WatchlistReportPanel({ item }) {
+  const ticker = item.ticker;
+  const [factsheet, setFactsheet] = React.useState(null);
+  const [aiReport, setAiReport] = React.useState(null);
+  const [loadingFs, setLoadingFs] = React.useState(true);
+  const [generating, setGenerating] = React.useState(false);
+  const [err, setErr] = React.useState(null);
+  const toast = useToast();
+
+  React.useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoadingFs(true);
+      setErr(null);
+      try {
+        const [fs, cached] = await Promise.all([
+          window.API.getCompanyFactsheet(ticker),
+          window.API.getCachedCompanyReport(ticker).catch(() => null),
+        ]);
+        if (cancelled) return;
+        setFactsheet(fs);
+        if (cached) setAiReport(cached);
+      } catch (e) {
+        if (cancelled) return;
+        setErr(e.detail || e.message);
+      } finally {
+        if (!cancelled) setLoadingFs(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [ticker]);
+
+  const onGenerate = async () => {
+    setGenerating(true);
+    try {
+      const full = await window.API.generateCompanyReport(ticker);
+      setAiReport(full);
+      toast.success('Raport AI wygenerowany', item.display_ticker || ticker);
+      if (full.warnings?.length) toast.info('Ostrzeżenia', full.warnings[0]);
+    } catch (e) {
+      toast.error('Generowanie raportu nie powiodło się', e.detail || e.message);
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const onRegenerate = async () => {
+    if (!window.confirm('Wygenerować nowy raport AI? Poprzedni zostanie nadpisany.')) return;
+    await onGenerate();
+  };
+
+  const report = aiReport || factsheet;
+  const hasAi = !!aiReport;
+
+  if (loadingFs) {
+    return <div className="px-5 py-6"><Skeleton className="h-[160px] w-full" /></div>;
+  }
+  if (err) {
+    return (
+      <div className="px-5 py-4 text-[12.5px] text-accent-red flex items-center gap-2">
+        <Icon name="alertTriangle" size={13} /> {err}
+      </div>
+    );
+  }
+  return (
+    <div className="px-5 pb-5 pt-3">
+      <div className="flex items-center justify-end gap-2 mb-4">
+        <a
+          href={window.API.companyReportHtmlUrl(ticker)}
+          target="_blank"
+          rel="noopener"
+          className="inline-flex items-center gap-1.5 px-2.5 h-8 rounded-md text-[12px] text-white/75 hover:text-white border border-white/[0.08] hover:border-white/[0.16] transition-colors"
+          title="Otwórz standalone HTML raport"
+        >
+          <Icon name="external" size={12} /> HTML
+        </a>
+        {hasAi ? (
+          <Button variant="ghost" size="sm" icon="refresh" loading={generating} onClick={onRegenerate}>
+            Regeneruj AI
+          </Button>
+        ) : (
+          <Button variant="primary" size="sm" icon="sparkles" loading={generating} onClick={onGenerate}>
+            Generuj raport AI
+          </Button>
+        )}
+      </div>
+      <CompanyReport report={report} isFactsheet={!hasAi} />
+    </div>
+  );
+}
+
+function WatchlistRow({ item, i, expanded, onToggle }) {
   const hasTarget = item.target_buy_price != null;
   const hasPrice = item.last_price != null;
   return (
+    <React.Fragment>
     <WMot.tr
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: 0.05 + i * 0.04 }}
-      whileHover={{ y: -1, backgroundColor: 'rgba(255,255,255,0.025)' }}
-      className={`group border-b border-white/[0.03] last:border-0 ${item.alert ? 'bg-accent-green/[0.04]' : ''}`}
+      whileHover={{ backgroundColor: 'rgba(255,255,255,0.025)' }}
+      onClick={onToggle}
+      className={`group cursor-pointer border-b border-white/[0.03] last:border-0 ${item.alert ? 'bg-accent-green/[0.04]' : ''} ${expanded ? 'bg-white/[0.025]' : ''}`}
     >
       <td className="px-5 py-3.5">
         <div className="flex items-center gap-2.5">
+          <Icon
+            name="chevronRight"
+            size={13}
+            className={`text-white/35 shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`}
+          />
           <div className="h-7 w-7 rounded-md bg-white/[0.04] border border-white/[0.06] flex items-center justify-center mono text-[10.5px] text-white/85">
             {item.display_ticker.slice(0, 3)}
           </div>
@@ -64,6 +165,14 @@ function WatchlistRow({ item, i }) {
         {item.notes || '—'}
       </td>
     </WMot.tr>
+    {expanded && (
+      <tr className="border-b border-white/[0.06]">
+        <td colSpan={8} className="p-0 bg-white/[0.012]">
+          <WatchlistReportPanel item={item} />
+        </td>
+      </tr>
+    )}
+    </React.Fragment>
   );
 }
 
@@ -167,6 +276,7 @@ function WatchlistTab() {
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
   const [editOpen, setEditOpen] = React.useState(false);
+  const [expandedTicker, setExpandedTicker] = React.useState(null);
   const toast = useToast();
 
   const loadStatus = React.useCallback(async () => {
@@ -229,7 +339,7 @@ function WatchlistTab() {
       <SectionHeader
         eyebrow="Śledzone"
         title="Watchlist"
-        description="Tickery które obserwujesz, ale jeszcze nie posiadasz. Ustaw cenę docelową, aby dostać alert gdy spadnie."
+        description="Tickery które obserwujesz, ale jeszcze nie posiadasz. Ustaw cenę docelową, aby dostać alert gdy spadnie. Kliknij wiersz, aby rozwinąć raport monitoringu (factsheet + AI on-demand)."
         right={
           <div className="flex items-center gap-2">
             <Button variant="outline" icon="edit" onClick={() => setEditOpen(true)}>
@@ -290,7 +400,17 @@ function WatchlistTab() {
                 </tr>
               </thead>
               <tbody>
-                {status.items.map((it, i) => <WatchlistRow key={it.ticker} item={it} i={i} />)}
+                {status.items.map((it, i) => (
+                  <WatchlistRow
+                    key={it.ticker}
+                    item={it}
+                    i={i}
+                    expanded={expandedTicker === it.ticker}
+                    onToggle={() =>
+                      setExpandedTicker((t) => (t === it.ticker ? null : it.ticker))
+                    }
+                  />
+                ))}
               </tbody>
             </table>
           </div>
