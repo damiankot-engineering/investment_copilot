@@ -156,7 +156,11 @@ function SentimentDot({ sentiment }) {
 
 function NewsList({ items }) {
   if (!items?.length) {
-    return <div className="text-[12px] text-white/40 italic px-1 py-1">Brak newsów w cache.</div>;
+    return (
+      <div className="text-[12px] text-white/40 italic px-1 py-1">
+        Brak istotnych newsów z ostatnich 30 dni.
+      </div>
+    );
   }
   return (
     <ul className="flex flex-col">
@@ -228,13 +232,11 @@ function CompanyReport({ report, isFactsheet }) {
         </div>
       )}
 
-      {/* 04 · News */}
-      {report.news?.length > 0 && (
-        <div>
-          <SectionHeading num="04" title="Najnowsze newsy" />
-          <NewsList items={report.news} />
-        </div>
-      )}
+      {/* 04 · News — always shown; empty state explains "no relevant news". */}
+      <div>
+        <SectionHeading num="04" title="Najnowsze newsy" />
+        <NewsList items={report.news} />
+      </div>
 
       {/* 05 · Strengths vs risks */}
       <div>

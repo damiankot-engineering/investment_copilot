@@ -161,8 +161,12 @@ class WatchlistService:
 
     @staticmethod
     def keywords_map(watchlist: Watchlist) -> dict[str, list[str]]:
-        """``ticker -> keywords`` mapping for news refresh, same shape as PortfolioService."""
-        return {it.ticker: it.effective_keywords for it in watchlist.items}
+        """``ticker -> news-match terms`` mapping, same shape as PortfolioService.
+
+        Uses :attr:`WatchlistItem.news_identifiers` (ticker stem + brand name)
+        so news is matched on company identity, not broad sector themes.
+        """
+        return {it.ticker: it.news_identifiers for it in watchlist.items}
 
     def current_status(self, watchlist: Watchlist) -> WatchlistStatus:
         as_of = datetime.now(timezone.utc)

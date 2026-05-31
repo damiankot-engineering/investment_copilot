@@ -40,6 +40,7 @@ from pydantic import (
 )
 
 from investment_copilot.domain.models import normalize_ticker
+from investment_copilot.domain.news_match import derive_news_identifiers
 
 
 # --- Inputs (YAML) ----------------------------------------------------------
@@ -259,6 +260,17 @@ class Holding(BaseModel):
         if self.keywords:
             return list(self.keywords)
         return [self.ticker.split(".")[0].upper()]
+
+    @property
+    def news_identifiers(self) -> list[str]:
+        """Company-identifying terms for relevance-filtering news.
+
+        Unlike :attr:`effective_keywords` (which mixes in broad thematic
+        terms used to describe the thesis), this returns only the ticker
+        stem + brand name — the terms that actually mean "this article is
+        about this company". See :mod:`investment_copilot.domain.news_match`.
+        """
+        return derive_news_identifiers(self.ticker, self.name, self.keywords)
 
 
 class Portfolio(BaseModel):

@@ -4,10 +4,11 @@ Configured with a list of feed URLs. Per call, fetches each feed, applies
 ``since`` and (optional) keyword filtering, and returns a flat
 :class:`~investment_copilot.domain.models.NewsItem` list.
 
-Keyword matching is case-insensitive substring matching on title + summary.
-That's deliberately simple: GPW news is short-form and headlines reliably
-contain the company name. Fancier matching (NER, fuzzy, ticker symbols) is
-a future enhancement, not a v1 problem.
+Keyword matching is case-insensitive **word-boundary** matching on title +
+summary (see :mod:`investment_copilot.domain.news_match`). The terms passed in
+are company *identifiers* (ticker stem + brand name), so a headline is kept
+only when it actually names the company — not when it merely shares a sector
+term like "akcje" or "e-commerce".
 """
 
 from __future__ import annotations
@@ -20,6 +21,10 @@ from typing import Iterable
 import feedparser
 
 from investment_copilot.domain.models import NewsItem
+from investment_copilot.domain.news_match import (
+    compile_identity_matcher,
+    matches_identity,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +54,7 @@ class RSSProvider:
             return []
 
         since_aware = since if since.tzinfo else since.replace(tzinfo=timezone.utc)
-        kw_lower = [k.lower() for k in (keywords or []) if k]
+        matcher = compile_identity_matcher(keywords or [])
 
         results: list[NewsItem] = []
         for url in self.feeds:
@@ -73,7 +78,7 @@ class RSSProvider:
                 if not title or not link:
                     continue
 
-                if kw_lower and not _matches_keywords(title, summary, kw_lower):
+                if not matches_identity(title + " " + (summary or ""), matcher):
                     continue
 
                 results.append(
@@ -115,12 +120,3 @@ def _entry_published(entry: object) -> datetime | None:
         return datetime.fromtimestamp(time.mktime(parsed), tz=timezone.utc)
     except (TypeError, ValueError, OverflowError):
         return None
-
-
-def _matches_keywords(
-    title: str,
-    summary: str | None,
-    keywords_lower: list[str],
-) -> bool:
-    haystack = (title + " " + (summary or "")).lower()
-    return any(kw in haystack for kw in keywords_lower)

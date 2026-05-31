@@ -132,7 +132,11 @@ def test_keywords_map() -> None:
         ]
     )
     km = PortfolioService.keywords_map(portfolio)
-    assert km == {"pkn.pl": ["Orlen", "PKN"], "cdr.pl": ["CDR"]}
+    # news_identifiers: ticker stem first, then single-token keywords (no
+    # display name set here). Order-insensitive, de-duplicated.
+    assert set(km.keys()) == {"pkn.pl", "cdr.pl"}
+    assert set(km["pkn.pl"]) == {"PKN", "Orlen"}
+    assert km["cdr.pl"] == ["CDR"]
 
 
 def test_total_cost_basis_static() -> None:

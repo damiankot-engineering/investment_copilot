@@ -138,8 +138,13 @@ class PortfolioService:
 
     @staticmethod
     def keywords_map(portfolio: Portfolio) -> dict[str, list[str]]:
-        """Build the ``ticker -> keywords`` mapping for news refresh."""
-        return {h.ticker: h.effective_keywords for h in portfolio.holdings}
+        """Build the ``ticker -> news-match terms`` mapping for news refresh.
+
+        Uses :attr:`Holding.news_identifiers` (ticker stem + brand name), not
+        the broad ``keywords`` list, so news is matched on company identity
+        rather than sector themes like "akcje"/"e-commerce".
+        """
+        return {h.ticker: h.news_identifiers for h in portfolio.holdings}
 
     @staticmethod
     def total_cost_basis(portfolio: Portfolio) -> float:

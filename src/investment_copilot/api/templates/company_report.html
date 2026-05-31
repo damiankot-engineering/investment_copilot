@@ -123,7 +123,7 @@
     <div class="profile" data-field="market"></div>
   </section>
 
-  <section data-field="news-section" style="display:none">
+  <section data-field="news-section">
     <div class="section-title"><span>Najnowsze newsy</span><span class="num">04</span></div>
     <ul class="news-list" data-field="news"></ul>
   </section>
@@ -188,12 +188,11 @@
   }
   function renderNews(items) {
     var root = $('[data-field="news"]');
-    var section = document.querySelector('[data-field="news-section"]');
-    if (!root || !Array.isArray(items) || items.length === 0) {
-      if (section) section.style.display = "none";
+    if (!root) return;
+    if (!Array.isArray(items) || items.length === 0) {
+      root.innerHTML = '<li style="color:var(--muted);font-style:italic;list-style:none">Brak istotnych newsów z ostatnich 30 dni.</li>';
       return;
     }
-    if (section) section.style.display = "";
     root.innerHTML = items.map(function (n) {
       var sent = (n.sentiment === "positive" || n.sentiment === "negative" || n.sentiment === "neutral") ? n.sentiment : "";
       var dot = '<span class="news-dot ' + sent + '" title="' + (sent || "nieoceniony") + '"></span>';

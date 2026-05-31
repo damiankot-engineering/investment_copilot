@@ -16,6 +16,7 @@ from typing import Final
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from investment_copilot.domain.models import normalize_ticker
+from investment_copilot.domain.news_match import derive_news_identifiers
 
 
 class WatchlistItem(BaseModel):
@@ -76,6 +77,16 @@ class WatchlistItem(BaseModel):
         if self.keywords:
             return list(self.keywords)
         return [self.ticker.split(".")[0].upper()]
+
+    @property
+    def news_identifiers(self) -> list[str]:
+        """Company-identifying terms for relevance-filtering news.
+
+        Mirrors :attr:`Holding.news_identifiers` — ticker stem + brand name,
+        excluding broad thematic keywords. See
+        :mod:`investment_copilot.domain.news_match`.
+        """
+        return derive_news_identifiers(self.ticker, self.name, self.keywords)
 
 
 class Watchlist(BaseModel):

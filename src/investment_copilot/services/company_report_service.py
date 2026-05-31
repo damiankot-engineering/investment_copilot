@@ -32,6 +32,7 @@ from investment_copilot.domain.company_report import (
 )
 from investment_copilot.domain.fundamentals import DividendEvent, FundamentalsSnapshot
 from investment_copilot.domain.models import NewsItem, normalize_ticker
+from investment_copilot.domain.news_match import compile_identity_matcher
 from investment_copilot.domain.portfolio import (
     Holding,
     HoldingStatus,
@@ -108,7 +109,7 @@ class CompanyReportService:
         fundamentals = self._fetch_fundamentals_cached(holding.ticker)
         fundamentals = self._overlay_ohlcv(holding.ticker, fundamentals)
         fundamentals = self._overlay_dividend_yield(holding.ticker, fundamentals)
-        news = self._load_news(holding.ticker)
+        news = self._load_news(holding.ticker, holding.news_identifiers)
         # Read-only: surface whatever sentiment is already cached (no LLM call,
         # so the factsheet stays instant). Unrated news render without a dot.
         sentiment = self._cached_sentiment_map(news)
@@ -133,7 +134,7 @@ class CompanyReportService:
         fundamentals = self._fetch_fundamentals_cached(holding.ticker)
         fundamentals = self._overlay_ohlcv(holding.ticker, fundamentals)
         fundamentals = self._overlay_dividend_yield(holding.ticker, fundamentals)
-        news = self._load_news(holding.ticker)
+        news = self._load_news(holding.ticker, holding.news_identifiers)
 
         warnings: list[str] = []
 
@@ -470,9 +471,22 @@ class CompanyReportService:
             return fundamentals
         return fundamentals.model_copy(update=updates)
 
-    def _load_news(self, ticker: str) -> list[NewsItem]:
+    def _load_news(
+        self, ticker: str, identifiers: Sequence[str] | None = None
+    ) -> list[NewsItem]:
         since = datetime.now(timezone.utc) - timedelta(days=NEWS_DAYS_BACK)
         items = self._data.load_news(ticker=ticker, since=since)
+        # Relevance safety-net: re-apply the company-identity filter at read
+        # time. Rows stamped under the old broad-keyword matcher (e.g. generic
+        # "akcje" news tagged onto XTB) are dropped here immediately, without
+        # needing to purge or re-refresh the news table.
+        if identifiers:
+            matcher = compile_identity_matcher(identifiers)
+            if matcher is not None:
+                items = [
+                    n for n in items
+                    if matcher.search((n.title or "") + " " + (n.summary or ""))
+                ]
         # Sort desc by date so news:1 is freshest
         items.sort(key=lambda n: n.published_at, reverse=True)
         return items[:NEWS_TOP_N]
