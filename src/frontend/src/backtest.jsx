@@ -15,6 +15,10 @@ const STRATEGIES = [
   { value: 'momentum',     label: 'Momentum',     icon: 'zap',    hint: 'Top-N momentum 12-1m' },
   { value: 'buy_and_hold', label: 'Buy & Hold',   icon: 'target', hint: 'Kup i trzymaj, bez sygnałów' },
 ];
+// Strategy used for the auto-run on app start (BacktestConfig has no strategy
+// field, so this is the frontend default — robust because Buy & Hold needs no
+// long moving-average history).
+const DEFAULT_STRATEGY = 'buy_and_hold';
 
 /* ---------- Tooltips ---------- */
 function EquityTooltip({ active, payload, label, benchmarkLabel = 'Benchmark' }) {
@@ -204,45 +208,65 @@ function BacktestTab() {
   const [animateKey, setAnimateKey] = React.useState(0);
   const toast = useToast();
 
-  // Load defaults from /api/config on mount (best-effort; FALLBACK_BENCHMARKS
-  // is the initial state so the dropdown never collapses if the call fails).
-  React.useEffect(() => {
-    (async () => {
-      try {
-        const cfg = await window.API.getConfig();
-        if (cfg.benchmark) setBenchmark(cfg.benchmark);
-        if (Array.isArray(cfg.available_benchmarks) && cfg.available_benchmarks.length > 0) {
-          setAvailableBenchmarks(cfg.available_benchmarks);
-        }
-        // Pre-fill dates from config only if user hasn't picked anything yet
-        // (initial state defaults to 2026-01-01 → today).
-      } catch (err) {
-        console.error('Could not load /api/config:', err);
-      }
-    })();
-  }, []);
-
-  const runBacktest = async () => {
+  // Core runner. `silent` suppresses both toasts (used by the auto-run so a
+  // missing-data failure doesn't pop an error on every app start — the
+  // EmptyState already guides the user to refresh data).
+  const executeBacktest = async (
+    { strategy: strat, benchmark: bm, startDate: sd, endDate: ed },
+    { silent = false } = {},
+  ) => {
     setRunning(true);
     setResult(null);
     try {
-      const r = await window.API.runBacktest(strategy, {
-        startDate: startDate || undefined,
-        endDate: endDate || undefined,
-        benchmark,
+      const r = await window.API.runBacktest(strat, {
+        startDate: sd || undefined,
+        endDate: ed || undefined,
+        benchmark: bm,
       });
       setResult(r);
       setDrawdown(r.drawdown || []);
       setAnimateKey(k => k + 1);
-      const label = STRATEGIES.find(s => s.value === strategy)?.label || strategy;
-      toast.success('Backtest gotowy', `Strategia ${label}.`);
+      if (!silent) {
+        const label = STRATEGIES.find(s => s.value === strat)?.label || strat;
+        toast.success('Backtest gotowy', `Strategia ${label}.`);
+      }
     } catch (err) {
       console.error(err);
-      toast.error('Backtest nie powiódł się', err.detail || err.message);
+      if (!silent) toast.error('Backtest nie powiódł się', err.detail || err.message);
     } finally {
       setRunning(false);
     }
   };
+
+  // Manual run (the "Uruchom backtest" button) — uses the current UI params.
+  const runBacktest = () => executeBacktest({ strategy, benchmark, startDate, endDate });
+
+  // On app start: load defaults from /api/config (best-effort; FALLBACK_BENCHMARKS
+  // is the initial state so the dropdown never collapses if the call fails),
+  // prefill the inputs, then auto-run the backtest with the default config.
+  React.useEffect(() => {
+    (async () => {
+      let bm = benchmark;
+      let sd = startDate;
+      let ed = endDate;
+      try {
+        const cfg = await window.API.getConfig();
+        if (cfg.benchmark) { bm = cfg.benchmark; setBenchmark(bm); }
+        if (Array.isArray(cfg.available_benchmarks) && cfg.available_benchmarks.length > 0) {
+          setAvailableBenchmarks(cfg.available_benchmarks);
+        }
+        if (cfg.backtest_start_date) { sd = cfg.backtest_start_date; setStartDate(sd); }
+        // end_date null in config means "up to latest available" → empty input.
+        if ('backtest_end_date' in cfg) { ed = cfg.backtest_end_date || ''; setEndDate(ed); }
+      } catch (err) {
+        console.error('Could not load /api/config:', err);
+      }
+      await executeBacktest(
+        { strategy: DEFAULT_STRATEGY, benchmark: bm, startDate: sd, endDate: ed },
+        { silent: true },
+      );
+    })();
+  }, []);
 
   const benchmarkLabel = (availableBenchmarks.find(b => b.value === benchmark) || {}).label || benchmark.toUpperCase();
 

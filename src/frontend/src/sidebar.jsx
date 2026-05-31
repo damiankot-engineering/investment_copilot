@@ -4,8 +4,9 @@ const SIDEBAR_NAV = [
   { id: 'portfolio',  label: 'Portfel',        icon: 'wallet',   hint: 'Pozycje i KPI' },
   { id: 'watchlist',  label: 'Watchlist',      icon: 'eye',      hint: 'Tickery do śledzenia + raporty' },
   { id: 'backtest',   label: 'Backtest',       icon: 'barChart', hint: 'Strategie i metryki' },
-  // 'analysis' (Analiza AI) hidden from the UI — component + backend kept.
-  { id: 'reports',    label: 'Raporty',        icon: 'fileText', hint: 'Markdown reports' },
+  // 'analysis' (Analiza AI) and 'reports' (concatenated Markdown reports) are
+  // hidden from the UI — components + backends kept. Reports now live per
+  // feature (company HTML report, backtest, …), not as one concatenated tab.
   { id: 'monitoring', label: 'Monitoring',     icon: 'activity', hint: 'Raporty per spółka + kalendarz' },
 ];
 

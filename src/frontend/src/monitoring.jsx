@@ -264,6 +264,9 @@ function MonitoringTab() {
   const [loadingPf, setLoadingPf] = React.useState(true);
   const [loadingUp, setLoadingUp] = React.useState(true);
   const [expandedTicker, setExpandedTicker] = React.useState(null);
+  const [bulkRunning, setBulkRunning] = React.useState(false);
+  const [bulkProgress, setBulkProgress] = React.useState(null); // {done,total,ticker}
+  const [reloadKey, setReloadKey] = React.useState(0); // bump → remount cards
   const toast = useToast();
 
   React.useEffect(() => {
@@ -294,15 +297,84 @@ function MonitoringTab() {
 
   const holdings = portfolio?.holdings || [];
 
+  // Generate the AI report for every holding, one ticker at a time (each is a
+  // focused LLM call). Regenerates all (overwrites existing). On completion we
+  // bump reloadKey so the cards remount and pick up their fresh cached reports.
+  const onBulkGenerate = async () => {
+    if (holdings.length === 0 || bulkRunning) return;
+    if (!window.confirm(
+      `Wygenerować raporty AI dla wszystkich ${holdings.length} spółek? ` +
+      `Istniejące raporty zostaną nadpisane (jedno wywołanie LLM na spółkę).`
+    )) return;
+    setBulkRunning(true);
+    let ok = 0;
+    const failed = [];
+    for (let i = 0; i < holdings.length; i++) {
+      const h = holdings[i];
+      setBulkProgress({ done: i, total: holdings.length, ticker: h.ticker });
+      try {
+        await window.API.generateCompanyReport(h.ticker);
+        ok += 1;
+      } catch (e) {
+        console.error('Bulk report failed for', h.ticker, e);
+        failed.push(h.ticker);
+      }
+    }
+    setBulkProgress({ done: holdings.length, total: holdings.length, ticker: null });
+    setReloadKey((k) => k + 1); // remount cards → they load the new cached reports
+    setBulkRunning(false);
+    setBulkProgress(null);
+    if (failed.length === 0) {
+      toast.success('Raporty AI gotowe', `Wygenerowano ${ok}/${holdings.length}.`);
+    } else {
+      toast.error(
+        'Część raportów nie powiodła się',
+        `OK ${ok}/${holdings.length} · błędy: ${failed.join(', ')}`,
+      );
+    }
+  };
+
   return (
     <div className="flex flex-col gap-6">
       <SectionHeader
         eyebrow="Snapshot per spółka"
         title="Monitoring"
         description="Deterministyczne fact-sheety z BR + OHLCV. Pełna analiza AI on-demand per spółka, z must-cite walidacją cytowań."
+        right={
+          holdings.length > 0 ? (
+            <Button
+              variant="primary"
+              icon="sparkles"
+              loading={bulkRunning}
+              onClick={onBulkGenerate}
+            >
+              {bulkRunning ? 'Generuję…' : 'Generuj raporty AI (wszystkie)'}
+            </Button>
+          ) : undefined
+        }
       />
 
       <UpcomingReports items={upcoming} loading={loadingUp} />
+
+      {bulkRunning && bulkProgress && (
+        <Card className="px-5 py-4 flex items-center gap-3">
+          <div className="h-9 w-9 rounded-lg bg-accent-violet/15 text-accent-violet flex items-center justify-center">
+            <Icon name="sparkles" size={14} />
+          </div>
+          <div className="flex-1">
+            <div className="text-[13px] text-white">
+              Generuję raporty AI… ({bulkProgress.done}/{bulkProgress.total})
+              {bulkProgress.ticker ? ` · ${bulkProgress.ticker}` : ''}
+            </div>
+            <div className="mt-2 h-1 rounded-full overflow-hidden bg-white/[0.05]">
+              <div
+                className="h-full bg-gradient-to-r from-accent-cyan to-accent-violet transition-all duration-300"
+                style={{ width: `${Math.round((bulkProgress.done / bulkProgress.total) * 100)}%` }}
+              />
+            </div>
+          </div>
+        </Card>
+      )}
 
       {loadingPf ? (
         <div className="flex flex-col gap-3">
@@ -328,7 +400,7 @@ function MonitoringTab() {
         <div className="flex flex-col gap-3">
           {holdings.map((h, i) => (
             <CompanyCard
-              key={h.ticker}
+              key={`${h.ticker}-${reloadKey}`}
               holding={h}
               i={i}
               expanded={expandedTicker === h.ticker}
