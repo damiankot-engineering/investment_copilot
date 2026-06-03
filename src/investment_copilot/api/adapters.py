@@ -114,6 +114,7 @@ def holding_status_to_dto(s: HoldingStatus) -> HoldingStatusDTO:
 
 def portfolio_to_dto(p: Portfolio) -> PortfolioDTO:
     return PortfolioDTO(
+        name=p.name,
         base_currency=p.base_currency,
         holdings=[holding_to_dto(h) for h in p.holdings],
     )

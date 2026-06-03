@@ -60,11 +60,17 @@ class StorageConfig(BaseModel):
 
 
 class PortfolioRefConfig(BaseModel):
-    """Where the user's portfolio YAML lives."""
+    """Where the user's portfolio YAML(s) live.
+
+    ``path`` is the default portfolio (id ``"default"``). ``dir`` holds any
+    additional named portfolios as ``<id>.yaml`` files — see
+    :class:`~investment_copilot.services.portfolio_registry.PortfolioRegistry`.
+    """
 
     path: Path = Path("portfolio.yaml")
+    dir: Path = Path("portfolios")
 
-    @field_validator("path")
+    @field_validator("path", "dir")
     @classmethod
     def _expand(cls, v: Path) -> Path:
         return Path(v).expanduser()

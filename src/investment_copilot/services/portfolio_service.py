@@ -104,6 +104,8 @@ def save_portfolio(portfolio: Portfolio, path: Path | str) -> Path:
             raise PortfolioError(f"Failed to write backup {backup}: {exc}") from exc
 
     data = portfolio.model_dump(mode="json", exclude_none=False)
+    if not data.get("name"):
+        data.pop("name", None)  # omit empty portfolio label to keep the file tidy
     for h in data.get("holdings", []):
         if not h.get("name"):
             h.pop("name", None)

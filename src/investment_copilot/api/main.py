@@ -48,13 +48,17 @@ from investment_copilot.api.schemas import (
     BacktestResultDTO,
     BenchmarkInfoDTO,
     CalendarBundleDTO,
+    CreatePortfolioRequest,
     DataUpdateResult,
+    DuplicatePortfolioRequest,
     GenerateReportRequest,
     GenerateReportResponse,
     HealthDTO,
     MonitoringSnapshotDTO,
     PortfolioDTO,
+    PortfolioRefDTO,
     PortfolioStatusDTO,
+    RenamePortfolioRequest,
     ReportContentDTO,
     ReportFileDTO,
     RunMonitoringRequest,
@@ -78,6 +82,10 @@ from investment_copilot.services import (
     load_watchlist,
     save_portfolio,
     save_watchlist,
+)
+from investment_copilot.services.portfolio_registry import (
+    PortfolioNotFoundError,
+    PortfolioRegistryError,
 )
 
 logger = logging.getLogger(__name__)
@@ -249,6 +257,16 @@ def create_app() -> FastAPI:
                 h.pop("shares", None)
                 h.pop("entry_price", None)
                 h.pop("entry_date", None)
+        # Preserve the portfolio's display label across holdings-only edits:
+        # the editor sends {base_currency, holdings} without a name, but the
+        # label is set via the registry (PATCH /api/portfolios/{id}).
+        if not raw.get("name"):
+            try:
+                existing = await asyncio.to_thread(load_portfolio, str(pf_path))
+                if existing.name:
+                    raw["name"] = existing.name
+            except PortfolioError:
+                pass
         try:
             domain_portfolio = Portfolio.model_validate(raw)
         except Exception as exc:
@@ -275,6 +293,112 @@ def create_app() -> FastAPI:
             container.portfolio_service.current_status, portfolio
         )
         return adapters.portfolio_status_to_dto(status_obj, portfolio=portfolio)
+
+    # ------------------------------------------------------- Portfolios (registry)
+
+    def _ref_to_dto(ref) -> PortfolioRefDTO:
+        return PortfolioRefDTO(
+            id=ref.id, name=ref.name, is_default=ref.is_default, n_holdings=ref.n_holdings,
+        )
+
+    @app.get(
+        "/api/portfolios",
+        response_model=list[PortfolioRefDTO],
+        tags=["portfolios"],
+    )
+    async def list_portfolios(
+        container: Annotated[ServiceContainer, Depends(get_container)],
+    ) -> list[PortfolioRefDTO]:
+        """List discoverable portfolios (default first, then ``portfolios/*.yaml``)."""
+        refs = await asyncio.to_thread(container.portfolio_registry.list)
+        return [_ref_to_dto(r) for r in refs]
+
+    @app.post(
+        "/api/portfolios",
+        response_model=PortfolioRefDTO,
+        status_code=201,
+        tags=["portfolios"],
+    )
+    async def create_portfolio(
+        body: CreatePortfolioRequest,
+        container: Annotated[ServiceContainer, Depends(get_container)],
+    ) -> PortfolioRefDTO:
+        """Create a new empty portfolio file ``portfolios/<id>.yaml``."""
+        try:
+            ref = await asyncio.to_thread(
+                container.portfolio_registry.create,
+                body.id, name=body.name, base_currency=body.base_currency,
+            )
+        except PortfolioRegistryError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+        except PortfolioError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return _ref_to_dto(ref)
+
+    @app.patch(
+        "/api/portfolios/{pid}",
+        response_model=PortfolioRefDTO,
+        tags=["portfolios"],
+    )
+    async def rename_portfolio(
+        pid: str,
+        body: RenamePortfolioRequest,
+        container: Annotated[ServiceContainer, Depends(get_container)],
+    ) -> PortfolioRefDTO:
+        """Set a portfolio's display label (id/filename unchanged)."""
+        try:
+            ref = await asyncio.to_thread(
+                container.portfolio_registry.rename, pid, body.name,
+            )
+        except PortfolioNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        except PortfolioError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return _ref_to_dto(ref)
+
+    @app.post(
+        "/api/portfolios/{pid}/duplicate",
+        response_model=PortfolioRefDTO,
+        status_code=201,
+        tags=["portfolios"],
+    )
+    async def duplicate_portfolio(
+        pid: str,
+        body: DuplicatePortfolioRequest,
+        container: Annotated[ServiceContainer, Depends(get_container)],
+    ) -> PortfolioRefDTO:
+        """Copy ``pid``'s holdings into a new ``portfolios/<new_id>.yaml``."""
+        try:
+            ref = await asyncio.to_thread(
+                container.portfolio_registry.duplicate,
+                pid, body.new_id, name=body.name,
+            )
+        except PortfolioNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        except PortfolioRegistryError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+        except PortfolioError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return _ref_to_dto(ref)
+
+    @app.delete(
+        "/api/portfolios/{pid}",
+        status_code=204,
+        tags=["portfolios"],
+    )
+    async def delete_portfolio(
+        pid: str,
+        container: Annotated[ServiceContainer, Depends(get_container)],
+    ) -> None:
+        """Soft-delete a portfolio (moved to ``portfolios/.trash/``). Not the default."""
+        try:
+            await asyncio.to_thread(container.portfolio_registry.delete, pid)
+        except PortfolioNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        except PortfolioRegistryError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except PortfolioError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
 
     # ------------------------------------------------------------- Watchlist
 

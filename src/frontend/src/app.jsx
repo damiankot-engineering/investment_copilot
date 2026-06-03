@@ -2,11 +2,12 @@
 
 const { motion: APMot, AnimatePresence: APAP } = window.Motion;
 
-function TopBar({ asOf, onRefresh, refreshing }) {
+function TopBar({ asOf, onRefresh, refreshing, activePortfolioId, onSwitchPortfolio }) {
   const [q, setQ] = React.useState('');
   return (
     <div className="flex items-center justify-between gap-4 px-6 py-3.5 border-b border-white/[0.05] bg-gradient-to-b from-white/[0.02] to-transparent">
       <div className="flex items-center gap-3 flex-1 min-w-0">
+        <PortfolioSwitcher activeId={activePortfolioId} onSwitch={onSwitchPortfolio} />
         <div className="relative flex-1 max-w-md">
           <Input
             icon="search"
@@ -56,6 +57,15 @@ function Disclaimer() {
 
 function App() {
   const [active, setActive] = React.useState('portfolio');
+  // Multi-portfolio: the active id is restored from localStorage and pushed
+  // into the API client (so the first status fetch is already scoped) before
+  // any child effect runs.
+  const [activePortfolioId, setActivePortfolioId] = React.useState(() => {
+    let id = 'default';
+    try { id = localStorage.getItem('activePortfolio') || 'default'; } catch (_) {}
+    window.API.setActivePortfolio(id);
+    return id;
+  });
   const [portfolio, setPortfolio] = React.useState(MOCK_PORTFOLIO);
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
@@ -88,6 +98,15 @@ function App() {
   }, [toast]);
 
   React.useEffect(() => { loadStatus(); }, [loadStatus]);
+
+  const onSwitchPortfolio = (id) => {
+    if (id === activePortfolioId) return;
+    window.API.setActivePortfolio(id);
+    try { localStorage.setItem('activePortfolio', id); } catch (_) {}
+    setActivePortfolioId(id);   // re-keys the tab container → all tabs refetch
+    setLoading(true);
+    loadStatus();               // reload the Portfolio tab's status immediately
+  };
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -181,12 +200,18 @@ function App() {
     <div className="flex h-screen w-screen">
       <Sidebar active={active} onChange={setActive} asOf={portfolio.as_of} />
       <main className="flex-1 flex flex-col min-w-0">
-        <TopBar asOf={portfolio.as_of} onRefresh={onRefresh} refreshing={refreshing} />
+        <TopBar
+          asOf={portfolio.as_of}
+          onRefresh={onRefresh}
+          refreshing={refreshing}
+          activePortfolioId={activePortfolioId}
+          onSwitchPortfolio={onSwitchPortfolio}
+        />
         <div className="flex-1 overflow-y-auto">
           <div className="max-w-[1480px] mx-auto px-8 py-7">
             {tabs.map(t => (
               <APMot.div
-                key={t.id}
+                key={`${t.id}:${activePortfolioId}`}
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}

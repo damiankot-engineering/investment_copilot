@@ -3,6 +3,7 @@
 config.yaml
 portfolio.yaml
 watchlist.yaml
+portfolios/
 *.yaml.bak
 
 # Cache & generated artifacts

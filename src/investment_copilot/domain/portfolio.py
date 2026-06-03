@@ -278,6 +278,15 @@ class Portfolio(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    name: str | None = Field(
+        default=None,
+        max_length=120,
+        description=(
+            "Optional display label (e.g. 'Główny', 'IKE'). The portfolio's "
+            "id is the YAML filename stem, not this field — see "
+            "PortfolioRegistry."
+        ),
+    )
     base_currency: str = Field(default="PLN", min_length=3, max_length=3)
     holdings: list[Holding] = Field(default_factory=list)
 

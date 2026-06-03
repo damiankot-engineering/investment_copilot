@@ -36,6 +36,7 @@ from investment_copilot.services.company_report_service import CompanyReportServ
 from investment_copilot.services.copilot_service import CopilotService
 from investment_copilot.services.data_service import DataService
 from investment_copilot.services.monitoring_service import MonitoringService
+from investment_copilot.services.portfolio_registry import PortfolioRegistry
 from investment_copilot.services.portfolio_service import PortfolioService
 from investment_copilot.services.watchlist_service import WatchlistService
 
@@ -56,6 +57,7 @@ class ServiceContainer:
     # Services
     data_service: DataService
     portfolio_service: PortfolioService
+    portfolio_registry: PortfolioRegistry
     backtest_service: BacktestService
     copilot_service: CopilotService
     monitoring_service: MonitoringService
@@ -85,6 +87,10 @@ def build_container(config: AppConfig) -> ServiceContainer:
         parquet_cache=parquet_cache,
     )
     portfolio_service = PortfolioService(data_service=data_service)
+    portfolio_registry = PortfolioRegistry(
+        portfolios_dir=config.portfolio.dir,
+        default_path=config.portfolio.path,
+    )
     backtest_service = BacktestService(
         data_service=data_service,
         backtest_config=config.backtest,
@@ -123,6 +129,7 @@ def build_container(config: AppConfig) -> ServiceContainer:
         llm_client=llm_client,
         data_service=data_service,
         portfolio_service=portfolio_service,
+        portfolio_registry=portfolio_registry,
         backtest_service=backtest_service,
         copilot_service=copilot_service,
         monitoring_service=monitoring_service,

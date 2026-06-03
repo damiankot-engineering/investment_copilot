@@ -85,6 +85,7 @@ class HoldingStatusDTO(HoldingDTO):
 class PortfolioDTO(BaseModel):
     """A portfolio as the frontend sees it (for GET/PUT /api/portfolio)."""
 
+    name: str | None = None
     base_currency: str = "PLN"
     holdings: list[HoldingDTO]
 
@@ -392,3 +393,30 @@ class AppConfigDTO(BaseModel):
     backtest_start_date: date
     backtest_end_date: date | None
     available_benchmarks: list[BenchmarkInfoDTO]
+
+
+# --- Multi-portfolio registry ------------------------------------------------
+
+
+class PortfolioRefDTO(BaseModel):
+    """A discoverable portfolio in the registry (id = YAML filename stem)."""
+
+    id: str
+    name: str | None = None
+    is_default: bool
+    n_holdings: int
+
+
+class CreatePortfolioRequest(BaseModel):
+    id: str
+    name: str | None = None
+    base_currency: str = "PLN"
+
+
+class RenamePortfolioRequest(BaseModel):
+    name: str | None = None
+
+
+class DuplicatePortfolioRequest(BaseModel):
+    new_id: str
+    name: str | None = None

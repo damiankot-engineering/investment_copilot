@@ -9,6 +9,22 @@
 (function () {
   const BASE = (window.API_BASE || '').replace(/\/$/, '');
 
+  // Active portfolio id (multi-portfolio). When set, it's threaded into every
+  // request as `?portfolio=<id>`; the backend resolver maps it to a file.
+  // `null`/'default' → the default portfolio (param omitted).
+  let activePortfolio = null;
+  function setActivePortfolio(id) {
+    activePortfolio = id && id !== 'default' ? id : null;
+  }
+  // Append `?portfolio=` to a raw URL string (for the non-`request()` paths:
+  // EventSource + downloadable report URLs).
+  function withPortfolio(urlStr) {
+    if (!activePortfolio) return urlStr;
+    const u = new URL(urlStr, window.location.origin);
+    if (!u.searchParams.has('portfolio')) u.searchParams.set('portfolio', activePortfolio);
+    return u.toString();
+  }
+
   class ApiError extends Error {
     constructor(message, status, detail) {
       super(message);
@@ -24,6 +40,11 @@
       Object.entries(query).forEach(([k, v]) => {
         if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
       });
+    }
+    // Multi-portfolio: scope every call to the active portfolio. Endpoints
+    // that don't declare a `portfolio` param simply ignore it.
+    if (activePortfolio && !url.searchParams.has('portfolio')) {
+      url.searchParams.set('portfolio', activePortfolio);
     }
     const init = { method, headers: { Accept: 'application/json' } };
     if (body !== undefined) {
@@ -80,6 +101,7 @@
       // side effects but uses GET for SSE compatibility.
       const url = new URL(`${BASE}/api/data/update/stream`, window.location.origin);
       url.searchParams.set('news_days_back', String(newsDaysBack));
+      if (activePortfolio) url.searchParams.set('portfolio', activePortfolio);
       const es = new EventSource(url.toString());
       let settled = false;
       const result = new Promise((resolve, reject) => {
@@ -153,9 +175,24 @@
     generateCompanyReport: (ticker) =>
       request('POST', `/api/companies/${encodeURIComponent(ticker)}/report`),
     companyReportHtmlUrl: (ticker) =>
-      `${BASE}/api/companies/${encodeURIComponent(ticker)}/report.html`,
+      withPortfolio(`${BASE}/api/companies/${encodeURIComponent(ticker)}/report.html`),
     listUpcomingReports: () =>
       request('GET', '/api/companies/upcoming'),
+
+    // Multi-portfolio registry
+    setActivePortfolio: (id) => setActivePortfolio(id),
+    getActivePortfolio: () => activePortfolio || 'default',
+    listPortfolios:   () => request('GET', '/api/portfolios'),
+    createPortfolio:  ({ id, name, baseCurrency = 'PLN' }) =>
+      request('POST', '/api/portfolios', { body: { id, name, base_currency: baseCurrency } }),
+    renamePortfolio:  (id, name) =>
+      request('PATCH', `/api/portfolios/${encodeURIComponent(id)}`, { body: { name } }),
+    duplicatePortfolio: (id, newId, name) =>
+      request('POST', `/api/portfolios/${encodeURIComponent(id)}/duplicate`, {
+        body: { new_id: newId, name },
+      }),
+    deletePortfolio:  (id) =>
+      request('DELETE', `/api/portfolios/${encodeURIComponent(id)}`),
   };
 
   window.API = API;

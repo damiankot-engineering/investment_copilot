@@ -15,11 +15,12 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import Depends
+from fastapi import Depends, HTTPException, Query
 
 from investment_copilot.config import load_config
 from investment_copilot.orchestrator import Orchestrator
 from investment_copilot.services import ServiceContainer, build_container
+from investment_copilot.services.portfolio_registry import PortfolioNotFoundError
 
 
 def _config_path() -> str:
@@ -34,25 +35,38 @@ def get_container() -> ServiceContainer:
 
 def get_portfolio_path(
     container: Annotated[ServiceContainer, Depends(get_container)],
+    portfolio: Annotated[
+        str | None,
+        Query(description="Portfolio id (filename stem). Omit → default portfolio."),
+    ] = None,
 ) -> Path:
+    """Resolve the active portfolio file from the ``?portfolio=<id>`` query param.
+
+    This single dependency makes every portfolio-scoped endpoint multi-portfolio
+    aware. ``COPILOT_PORTFOLIO`` env still forces a fixed path (CI/tests).
+    """
     override = os.environ.get("COPILOT_PORTFOLIO")
     if override:
         return Path(override)
-    return Path(container.config.portfolio.path)
+    try:
+        return container.portfolio_registry.resolve(portfolio).path
+    except PortfolioNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 
 
 def get_watchlist_path(
-    pf_path: Annotated[Path, Depends(get_portfolio_path)],
+    container: Annotated[ServiceContainer, Depends(get_container)],
 ) -> Path:
-    """Resolve the watchlist YAML path.
+    """Resolve the (single, global) watchlist YAML path.
 
-    Defaults to ``watchlist.yaml`` next to the portfolio file. Override
-    with ``COPILOT_WATCHLIST`` env var (mirrors COPILOT_PORTFOLIO).
+    The watchlist is shared across all portfolios — it sits next to the
+    *default* portfolio file, independent of the active ``?portfolio=``.
+    Override with ``COPILOT_WATCHLIST`` (mirrors COPILOT_PORTFOLIO).
     """
     override = os.environ.get("COPILOT_WATCHLIST")
     if override:
         return Path(override)
-    return pf_path.with_name("watchlist.yaml")
+    return Path(container.config.portfolio.path).with_name("watchlist.yaml")
 
 
 def get_orchestrator(
