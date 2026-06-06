@@ -141,6 +141,10 @@
         },
       }),
 
+    // Rebalancing
+    rebalancePlan:  (body = {}) => request('POST', '/api/rebalance/plan', { body }),
+    rebalanceApply: (body = {}) => request('POST', '/api/rebalance/apply', { body }),
+
     // Analysis
     runAnalysis:   ({ includeRisks = true, newsDaysBack = 14 } = {}) =>
       request('POST', '/api/analysis', {
@@ -183,8 +187,10 @@
     setActivePortfolio: (id) => setActivePortfolio(id),
     getActivePortfolio: () => activePortfolio || 'default',
     listPortfolios:   () => request('GET', '/api/portfolios'),
-    createPortfolio:  ({ id, name, baseCurrency = 'PLN' }) =>
-      request('POST', '/api/portfolios', { body: { id, name, base_currency: baseCurrency } }),
+    createPortfolio:  ({ id, name, baseCurrency = 'PLN', accountType = 'standard' }) =>
+      request('POST', '/api/portfolios', {
+        body: { id, name, base_currency: baseCurrency, account_type: accountType },
+      }),
     renamePortfolio:  (id, name) =>
       request('PATCH', `/api/portfolios/${encodeURIComponent(id)}`, { body: { name } }),
     duplicatePortfolio: (id, newId, name) =>

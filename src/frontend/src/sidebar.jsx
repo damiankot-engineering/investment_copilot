@@ -4,6 +4,7 @@ const SIDEBAR_NAV = [
   { id: 'portfolio',  label: 'Portfel',        icon: 'wallet',   hint: 'Pozycje i KPI' },
   { id: 'watchlist',  label: 'Watchlist',      icon: 'eye',      hint: 'Tickery do śledzenia + raporty' },
   { id: 'backtest',   label: 'Backtest',       icon: 'barChart', hint: 'Strategie i metryki' },
+  { id: 'rebalance',  label: 'Rebalancing',    icon: 'target',   hint: 'Plan zleceń do alokacji docelowej' },
   // 'analysis' (Analiza AI) and 'reports' (concatenated Markdown reports) are
   // hidden from the UI — components + backends kept. Reports now live per
   // feature (company HTML report, backtest, …), not as one concatenated tab.

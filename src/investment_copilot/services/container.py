@@ -38,6 +38,7 @@ from investment_copilot.services.data_service import DataService
 from investment_copilot.services.monitoring_service import MonitoringService
 from investment_copilot.services.portfolio_registry import PortfolioRegistry
 from investment_copilot.services.portfolio_service import PortfolioService
+from investment_copilot.services.rebalance_service import RebalanceService
 from investment_copilot.services.watchlist_service import WatchlistService
 
 
@@ -58,6 +59,7 @@ class ServiceContainer:
     data_service: DataService
     portfolio_service: PortfolioService
     portfolio_registry: PortfolioRegistry
+    rebalance_service: RebalanceService
     backtest_service: BacktestService
     copilot_service: CopilotService
     monitoring_service: MonitoringService
@@ -91,6 +93,7 @@ def build_container(config: AppConfig) -> ServiceContainer:
         portfolios_dir=config.portfolio.dir,
         default_path=config.portfolio.path,
     )
+    rebalance_service = RebalanceService(rebalance_config=config.rebalance)
     backtest_service = BacktestService(
         data_service=data_service,
         backtest_config=config.backtest,
@@ -130,6 +133,7 @@ def build_container(config: AppConfig) -> ServiceContainer:
         data_service=data_service,
         portfolio_service=portfolio_service,
         portfolio_registry=portfolio_registry,
+        rebalance_service=rebalance_service,
         backtest_service=backtest_service,
         copilot_service=copilot_service,
         monitoring_service=monitoring_service,

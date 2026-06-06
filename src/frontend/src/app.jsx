@@ -193,6 +193,7 @@ function App() {
     { id: 'portfolio',  node: <PortfolioTab portfolio={portfolio} onUpdatePortfolio={onUpdatePortfolio} onRefresh={onRefresh} refreshing={refreshing} refreshProgress={refreshProgress} benchmarkLabel={appConfig.benchmark_label} /> },
     { id: 'watchlist',  node: <WatchlistTab /> },
     { id: 'backtest',   node: <BacktestTab /> },
+    { id: 'rebalance',  node: <RebalanceTab /> },
     { id: 'monitoring', node: <MonitoringTab /> },
   ];
 

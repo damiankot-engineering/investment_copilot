@@ -129,6 +129,29 @@ def _fifo_walk(transactions: list[Transaction]) -> tuple[list[_Lot], float]:
     return lots, realized
 
 
+def preview_realized_pnl(
+    holding: "Holding", sell_shares: float, sell_price: float
+) -> float:
+    """Realized PnL that selling ``sell_shares`` at ``sell_price`` would book.
+
+    Computed exactly with the existing FIFO matcher: walk the holding's
+    transactions with and without a synthetic SELL appended, and return the
+    delta in realized PnL. Used by the rebalancing engine for its tax preview;
+    no I/O, no mutation. Returns 0 for a non-positive sell.
+    """
+    if sell_shares <= 0 or sell_price <= 0:
+        return 0.0
+    base = _fifo_walk(holding.transactions)[1]
+    sell = Transaction(
+        date=date.today(),
+        action="SELL",
+        shares=sell_shares,
+        price_per_share=sell_price,
+    )
+    after = _fifo_walk([*holding.transactions, sell])[1]
+    return after - base
+
+
 class Holding(BaseModel):
     """A single tracked position — current state derived from transactions."""
 
@@ -153,6 +176,16 @@ class Holding(BaseModel):
             "Optional keywords for news filtering. If empty, defaults to the "
             "ticker stem (e.g. 'PKN'). Recommended: provide brand-style "
             "keywords matching how the company appears in headlines."
+        ),
+    )
+    target_weight: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Optional strategic target weight as a fraction (0–1, e.g. 0.25 = "
+            "25%) used by the rebalancing engine. When unset on every holding, "
+            "the engine falls back to equal weight."
         ),
     )
 
@@ -287,8 +320,21 @@ class Portfolio(BaseModel):
             "PortfolioRegistry."
         ),
     )
+    account_type: Literal["standard", "ike", "ikze"] = Field(
+        default="standard",
+        description=(
+            "Tax treatment. 'ike'/'ikze' are Polish tax-advantaged retirement "
+            "accounts where capital gains are not taxed per-transaction — the "
+            "rebalancing tax preview shows 0 for them. 'standard' → 19% PIT."
+        ),
+    )
     base_currency: str = Field(default="PLN", min_length=3, max_length=3)
     holdings: list[Holding] = Field(default_factory=list)
+
+    @property
+    def is_tax_exempt(self) -> bool:
+        """True when realized gains aren't taxed per-transaction (IKE/IKZE)."""
+        return self.account_type in ("ike", "ikze")
 
     @field_validator("base_currency")
     @classmethod

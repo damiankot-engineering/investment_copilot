@@ -75,6 +75,7 @@ def holding_to_dto(h: Holding) -> HoldingDTO:
         entry_date=h.first_entry_date,
         thesis=h.thesis,
         keywords=list(h.keywords),
+        target_weight=h.target_weight,
         transactions=[
             TransactionDTO(
                 date=tx.date,

@@ -54,6 +54,7 @@ class PortfolioRef:
     path: Path
     is_default: bool
     n_holdings: int
+    account_type: str = "standard"
 
 
 def validate_portfolio_id(pid: str) -> str:
@@ -79,26 +80,34 @@ class PortfolioRegistry:
     # ---------------------------------------------------------------- Discovery
 
     @staticmethod
-    def _read_meta(path: Path) -> tuple[str | None, int]:
-        """Cheap ``(name, n_holdings)`` read — never raises (best-effort)."""
+    def _read_meta(path: Path) -> tuple[str | None, int, str]:
+        """Cheap ``(name, n_holdings, account_type)`` read — never raises."""
         if not path.is_file():
-            return None, 0
+            return None, 0, "standard"
         try:
             from investment_copilot.config.encoding import read_text_robust
 
             raw = yaml.safe_load(read_text_robust(path)) or {}
             if not isinstance(raw, dict):
-                return None, 0
+                return None, 0, "standard"
             name = raw.get("name")
             holdings = raw.get("holdings") or []
-            return (str(name) if name else None), (len(holdings) if isinstance(holdings, list) else 0)
+            account = raw.get("account_type") or "standard"
+            return (
+                str(name) if name else None,
+                len(holdings) if isinstance(holdings, list) else 0,
+                str(account),
+            )
         except Exception as exc:  # noqa: BLE001 - listing must not fault on one bad file
             logger.warning("Could not read portfolio meta from %s: %s", path, exc)
-            return None, 0
+            return None, 0, "standard"
 
     def _ref(self, pid: str, path: Path, *, is_default: bool) -> PortfolioRef:
-        name, n = self._read_meta(path)
-        return PortfolioRef(id=pid, name=name, path=path, is_default=is_default, n_holdings=n)
+        name, n, account = self._read_meta(path)
+        return PortfolioRef(
+            id=pid, name=name, path=path, is_default=is_default,
+            n_holdings=n, account_type=account,
+        )
 
     def list(self) -> list[PortfolioRef]:
         """Default entry first, then ``portfolios/*.yaml`` sorted by id."""
@@ -133,12 +142,24 @@ class PortfolioRegistry:
         return path
 
     def create(
-        self, pid: str, *, name: str | None = None, base_currency: str = "PLN"
+        self,
+        pid: str,
+        *,
+        name: str | None = None,
+        base_currency: str = "PLN",
+        account_type: str = "standard",
     ) -> PortfolioRef:
         """Create a new empty portfolio file ``<dir>/<pid>.yaml``."""
         pid = validate_portfolio_id(pid)
+        if account_type not in ("standard", "ike", "ikze"):
+            raise PortfolioRegistryError(f"Invalid account_type: {account_type!r}")
         path = self._path_for_new(pid)
-        portfolio = Portfolio(name=name or None, base_currency=base_currency, holdings=[])
+        portfolio = Portfolio(
+            name=name or None,
+            account_type=account_type,
+            base_currency=base_currency,
+            holdings=[],
+        )
         save_portfolio(portfolio, path)
         logger.info("Created portfolio %s at %s", pid, path)
         return self._ref(pid, path, is_default=False)

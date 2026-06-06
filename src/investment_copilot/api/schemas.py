@@ -60,6 +60,10 @@ class HoldingDTO(BaseModel):
     )
     thesis: str
     keywords: list[str] = Field(default_factory=list)
+    target_weight: float | None = Field(
+        default=None,
+        description="Strategic target weight as a fraction (0–1) for rebalancing.",
+    )
     transactions: list[TransactionDTO] = Field(
         default_factory=list,
         description=(
@@ -405,12 +409,14 @@ class PortfolioRefDTO(BaseModel):
     name: str | None = None
     is_default: bool
     n_holdings: int
+    account_type: str = "standard"
 
 
 class CreatePortfolioRequest(BaseModel):
     id: str
     name: str | None = None
     base_currency: str = "PLN"
+    account_type: str = "standard"  # standard | ike | ikze (validated downstream)
 
 
 class RenamePortfolioRequest(BaseModel):
@@ -420,3 +426,16 @@ class RenamePortfolioRequest(BaseModel):
 class DuplicatePortfolioRequest(BaseModel):
     new_id: str
     name: str | None = None
+
+
+# --- Rebalancing -------------------------------------------------------------
+
+
+class RebalancePlanRequest(BaseModel):
+    """Optional overrides for a rebalance plan. ``targets`` are in PERCENT
+    (0–100) keyed by ticker; omit to use per-holding target_weight / equal."""
+
+    targets: dict[str, float] | None = None
+    drift_band_pct: float | None = None
+    min_trade_value: float | None = None
+    round_to_whole_shares: bool | None = None

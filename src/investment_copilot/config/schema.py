@@ -121,6 +121,17 @@ class BacktestConfig(BaseModel):
     trading_days_per_year: PositiveInt = 252
 
 
+# --- Rebalance ---------------------------------------------------------------
+
+
+class RebalanceConfig(BaseModel):
+    """Default constraints for the rebalancing engine (request can override)."""
+
+    drift_band_pct: float = Field(default=5.0, ge=0.0)
+    min_trade_value: float = Field(default=200.0, ge=0.0)
+    round_to_whole_shares: bool = True
+
+
 # --- LLM ---------------------------------------------------------------------
 
 
@@ -155,5 +166,6 @@ class AppConfig(BaseModel):
     portfolio: PortfolioRefConfig = PortfolioRefConfig()
     strategies: StrategiesConfig = StrategiesConfig()
     backtest: BacktestConfig = BacktestConfig()
+    rebalance: RebalanceConfig = RebalanceConfig()
     llm: LLMConfig
     logging: LoggingConfig = LoggingConfig()

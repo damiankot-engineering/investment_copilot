@@ -58,6 +58,7 @@ from investment_copilot.api.schemas import (
     PortfolioDTO,
     PortfolioRefDTO,
     PortfolioStatusDTO,
+    RebalancePlanRequest,
     RenamePortfolioRequest,
     ReportContentDTO,
     ReportFileDTO,
@@ -67,8 +68,13 @@ from investment_copilot.api.schemas import (
     WatchlistStatusDTO,
 )
 from investment_copilot.domain.company_report import CalendarItem, CompanyReport
-from investment_copilot.domain.models import BENCHMARK_SYMBOLS, resolve_benchmark
+from investment_copilot.domain.models import (
+    BENCHMARK_SYMBOLS,
+    normalize_ticker,
+    resolve_benchmark,
+)
 from investment_copilot.domain.portfolio import Portfolio
+from investment_copilot.domain.rebalance import RebalancePlan
 from investment_copilot.domain.strategies import KNOWN_STRATEGIES
 from investment_copilot.domain.watchlist import Watchlist
 from investment_copilot.infrastructure.llm import LLMError
@@ -257,16 +263,26 @@ def create_app() -> FastAPI:
                 h.pop("shares", None)
                 h.pop("entry_price", None)
                 h.pop("entry_date", None)
-        # Preserve the portfolio's display label across holdings-only edits:
-        # the editor sends {base_currency, holdings} without a name, but the
-        # label is set via the registry (PATCH /api/portfolios/{id}).
-        if not raw.get("name"):
-            try:
-                existing = await asyncio.to_thread(load_portfolio, str(pf_path))
-                if existing.name:
-                    raw["name"] = existing.name
-            except PortfolioError:
-                pass
+        # The holdings editor sends {base_currency, holdings} only. Preserve
+        # the fields it doesn't carry from the existing file: the portfolio
+        # label + account_type, and each holding's target_weight (set via yaml
+        # or the rebalancing tab, not the editor) — otherwise an edit would
+        # silently wipe them.
+        try:
+            existing = await asyncio.to_thread(load_portfolio, str(pf_path))
+        except PortfolioError:
+            existing = None
+        if existing is not None:
+            if not raw.get("name") and existing.name:
+                raw["name"] = existing.name
+            if not raw.get("account_type") and existing.account_type:
+                raw["account_type"] = existing.account_type
+            existing_tw = {h.ticker: h.target_weight for h in existing.holdings}
+            for h in raw.get("holdings", []):
+                if h.get("target_weight") is None and h.get("ticker"):
+                    tw = existing_tw.get(normalize_ticker(h["ticker"]))
+                    if tw is not None:
+                        h["target_weight"] = tw
         try:
             domain_portfolio = Portfolio.model_validate(raw)
         except Exception as exc:
@@ -298,7 +314,8 @@ def create_app() -> FastAPI:
 
     def _ref_to_dto(ref) -> PortfolioRefDTO:
         return PortfolioRefDTO(
-            id=ref.id, name=ref.name, is_default=ref.is_default, n_holdings=ref.n_holdings,
+            id=ref.id, name=ref.name, is_default=ref.is_default,
+            n_holdings=ref.n_holdings, account_type=ref.account_type,
         )
 
     @app.get(
@@ -328,6 +345,7 @@ def create_app() -> FastAPI:
             ref = await asyncio.to_thread(
                 container.portfolio_registry.create,
                 body.id, name=body.name, base_currency=body.base_currency,
+                account_type=body.account_type,
             )
         except PortfolioRegistryError as exc:
             raise HTTPException(status_code=409, detail=str(exc))
@@ -399,6 +417,75 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc))
         except PortfolioError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
+
+    # ------------------------------------------------------------- Rebalance
+
+    def _rebalance_targets(body: RebalancePlanRequest) -> dict[str, float] | None:
+        """Convert the request's PERCENT targets to fractions keyed by norm ticker."""
+        if not body.targets:
+            return None
+        return {_norm_ticker(t): float(pct) / 100.0 for t, pct in body.targets.items()}
+
+    def _rebalance_constraints(body: RebalancePlanRequest, container: ServiceContainer):
+        base = container.rebalance_service.default_constraints()
+        overrides = {
+            k: v for k, v in {
+                "drift_band_pct": body.drift_band_pct,
+                "min_trade_value": body.min_trade_value,
+                "round_to_whole_shares": body.round_to_whole_shares,
+            }.items() if v is not None
+        }
+        return base.model_copy(update=overrides) if overrides else base
+
+    @app.post(
+        "/api/rebalance/plan",
+        response_model=RebalancePlan,
+        tags=["rebalance"],
+    )
+    async def rebalance_plan(
+        body: RebalancePlanRequest,
+        pf_path: Annotated[Path, Depends(get_portfolio_path)],
+        container: Annotated[ServiceContainer, Depends(get_container)],
+    ) -> RebalancePlan:
+        """Read-only rebalance plan for the active portfolio (no writes)."""
+        portfolio, status_obj = await _load_pf_and_status(pf_path, container)
+        return await asyncio.to_thread(
+            container.rebalance_service.plan,
+            portfolio, status_obj,
+            targets=_rebalance_targets(body),
+            constraints=_rebalance_constraints(body, container),
+        )
+
+    @app.post(
+        "/api/rebalance/apply",
+        response_model=PortfolioDTO,
+        tags=["rebalance"],
+    )
+    async def rebalance_apply(
+        body: RebalancePlanRequest,
+        pf_path: Annotated[Path, Depends(get_portfolio_path)],
+        container: Annotated[ServiceContainer, Depends(get_container)],
+    ) -> PortfolioDTO:
+        """Recompute the plan and append its trades to the portfolio (writes)."""
+        portfolio, status_obj = await _load_pf_and_status(pf_path, container)
+        plan = await asyncio.to_thread(
+            container.rebalance_service.plan,
+            portfolio, status_obj,
+            targets=_rebalance_targets(body),
+            constraints=_rebalance_constraints(body, container),
+        )
+        if not plan.trades:
+            raise HTTPException(
+                status_code=400, detail="Plan jest pusty — brak transakcji do zastosowania."
+            )
+        try:
+            updated = await asyncio.to_thread(
+                container.rebalance_service.apply, portfolio, plan
+            )
+            await asyncio.to_thread(save_portfolio, updated, str(pf_path))
+        except (PortfolioError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return adapters.portfolio_to_dto(updated)
 
     # ------------------------------------------------------------- Watchlist
 

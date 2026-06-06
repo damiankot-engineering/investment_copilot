@@ -5,10 +5,11 @@
 function ManagePortfoliosDialog({ open, onClose, items, onChanged, activeId, onSwitch }) {
   const [newId, setNewId] = React.useState('');
   const [newName, setNewName] = React.useState('');
+  const [newAccount, setNewAccount] = React.useState('standard');
   const [busy, setBusy] = React.useState(false);
   const toast = useToast();
 
-  React.useEffect(() => { if (open) { setNewId(''); setNewName(''); } }, [open]);
+  React.useEffect(() => { if (open) { setNewId(''); setNewName(''); setNewAccount('standard'); } }, [open]);
 
   const guard = async (fn, okMsg) => {
     setBusy(true);
@@ -26,8 +27,10 @@ function ManagePortfoliosDialog({ open, onClose, items, onChanged, activeId, onS
   const onCreate = () =>
     guard(async () => {
       if (!newId.trim()) throw new window.API.ApiError('Podaj id portfela', 0, 'Podaj id portfela');
-      await window.API.createPortfolio({ id: newId.trim(), name: newName.trim() || null });
-      setNewId(''); setNewName('');
+      await window.API.createPortfolio({
+        id: newId.trim(), name: newName.trim() || null, accountType: newAccount,
+      });
+      setNewId(''); setNewName(''); setNewAccount('standard');
     }, 'Portfel utworzony');
 
   const onRename = (it) => {
@@ -64,15 +67,27 @@ function ManagePortfoliosDialog({ open, onClose, items, onChanged, activeId, onS
         <div className="glass-soft rounded-xl p-4">
           <div className="text-[10.5px] uppercase tracking-[0.14em] text-white/40 mb-2">Nowy portfel</div>
           <div className="grid grid-cols-12 gap-2 items-end">
-            <div className="col-span-4">
+            <div className="col-span-3">
               <label className="text-[10.5px] text-white/40">id (a-z, 0-9, -, _)</label>
               <Input value={newId} onChange={e => setNewId(e.target.value)} placeholder="np. ike" className="mt-1" />
             </div>
-            <div className="col-span-5">
+            <div className="col-span-4">
               <label className="text-[10.5px] text-white/40">Nazwa (opcjonalnie)</label>
               <Input value={newName} onChange={e => setNewName(e.target.value)} placeholder="IKE" className="mt-1" />
             </div>
             <div className="col-span-3">
+              <label className="text-[10.5px] text-white/40">Typ konta</label>
+              <select
+                value={newAccount}
+                onChange={e => setNewAccount(e.target.value)}
+                className="mt-1 w-full h-9 px-2 rounded-lg bg-white/[0.03] border border-white/[0.08] hover:border-white/[0.15] text-[13px] text-white outline-none focus:border-accent-violet/50"
+              >
+                <option value="standard" className="bg-ink-900">Standard (PIT 19%)</option>
+                <option value="ike" className="bg-ink-900">IKE (bez podatku)</option>
+                <option value="ikze" className="bg-ink-900">IKZE (bez podatku)</option>
+              </select>
+            </div>
+            <div className="col-span-2">
               <Button variant="primary" icon="plus" loading={busy} onClick={onCreate} className="w-full">Utwórz</Button>
             </div>
           </div>
@@ -87,6 +102,9 @@ function ManagePortfoliosDialog({ open, onClose, items, onChanged, activeId, onS
                   <span className="text-[13px] font-medium text-white truncate">{it.name || it.id}</span>
                   <span className="mono text-[11px] text-white/40">{it.id}</span>
                   {it.is_default && <Badge variant="default">default</Badge>}
+                  {it.account_type && it.account_type !== 'standard' && (
+                    <Badge variant="on_track">{it.account_type.toUpperCase()}</Badge>
+                  )}
                   {activeId === it.id && <Badge variant="violet" icon="check">aktywny</Badge>}
                 </div>
                 <div className="text-[11px] text-white/40 mt-0.5">{it.n_holdings} pozycji</div>
