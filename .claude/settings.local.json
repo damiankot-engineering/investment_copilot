@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(curl -sI \"https://stooq.pl/q/g/?s=dnp\" -A \"Mozilla/5.0\" -m 8)",
-      "Bash(python -c ' *)"
-    ]
-  }
-}

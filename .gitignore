@@ -6,6 +6,10 @@ watchlist.yaml
 portfolios/
 *.yaml.bak
 
+# Local editor / tooling state (per-developer, never shared)
+.claude/settings.local.json
+.gstack/
+
 # Cache & generated artifacts
 data/
 reports/
