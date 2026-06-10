@@ -102,6 +102,42 @@ def test_rename_sets_label_only(tmp_path) -> None:
     assert reg.resolve("ike").path == tmp_path / "portfolios" / "ike.yaml"
 
 
+# --- account type (IKE/IKZE tax exemption) ---------------------------------
+
+
+def test_set_account_type_on_default(tmp_path) -> None:
+    reg = _make(tmp_path)
+    assert reg.resolve(DEFAULT_ID).account_type == "standard"
+    ref = reg.update_meta(DEFAULT_ID, account_type="ike")
+    assert ref.account_type == "ike"
+    # persisted + label preserved (changing the type must not wipe the name)
+    again = reg.resolve(DEFAULT_ID)
+    assert again.account_type == "ike" and again.name == "Główny"
+    assert load_portfolio(reg.path_for(DEFAULT_ID)).is_tax_exempt is True
+
+
+def test_set_account_type_preserves_name(tmp_path) -> None:
+    reg = _make(tmp_path)
+    reg.create("ike", name="IKE")
+    reg.update_meta("ike", account_type="ikze")
+    ref = reg.resolve("ike")
+    assert ref.account_type == "ikze" and ref.name == "IKE"
+
+
+def test_update_meta_rejects_bad_account_type(tmp_path) -> None:
+    reg = _make(tmp_path)
+    with pytest.raises(PortfolioRegistryError):
+        reg.update_meta(DEFAULT_ID, account_type="roth")
+
+
+def test_update_meta_name_only_keeps_account_type(tmp_path) -> None:
+    reg = _make(tmp_path)
+    reg.create("ike", name="IKE", account_type="ike")
+    reg.update_meta("ike", name="IKE Plus")  # touch name only
+    ref = reg.resolve("ike")
+    assert ref.name == "IKE Plus" and ref.account_type == "ike"
+
+
 def test_duplicate_copies_holdings(tmp_path) -> None:
     reg = _make(tmp_path)
     src = reg.create("ike", name="IKE")

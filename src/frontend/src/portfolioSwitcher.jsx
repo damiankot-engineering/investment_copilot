@@ -45,6 +45,12 @@ function ManagePortfoliosDialog({ open, onClose, items, onChanged, activeId, onS
     guard(() => window.API.duplicatePortfolio(it.id, newId.trim()), 'Portfel zduplikowany');
   };
 
+  const onSetAccount = (it, value) => {
+    if (value === (it.account_type || 'standard')) return;
+    const label = value === 'standard' ? 'Standard (PIT 19%)' : `${value.toUpperCase()} — bez podatku`;
+    guard(() => window.API.setPortfolioAccountType(it.id, value), `Typ konta: ${label}`);
+  };
+
   const onDelete = (it) => {
     if (!window.confirm(`Usunąć portfel „${it.name || it.id}"?\n\nPlik trafi do .trash (można odzyskać ręcznie).`)) return;
     guard(async () => {
@@ -102,14 +108,22 @@ function ManagePortfoliosDialog({ open, onClose, items, onChanged, activeId, onS
                   <span className="text-[13px] font-medium text-white truncate">{it.name || it.id}</span>
                   <span className="mono text-[11px] text-white/40">{it.id}</span>
                   {it.is_default && <Badge variant="default">default</Badge>}
-                  {it.account_type && it.account_type !== 'standard' && (
-                    <Badge variant="on_track">{it.account_type.toUpperCase()}</Badge>
-                  )}
                   {activeId === it.id && <Badge variant="violet" icon="check">aktywny</Badge>}
                 </div>
                 <div className="text-[11px] text-white/40 mt-0.5">{it.n_holdings} pozycji</div>
               </div>
               <div className="flex items-center gap-1.5 shrink-0">
+                <select
+                  value={it.account_type || 'standard'}
+                  onChange={e => onSetAccount(it, e.target.value)}
+                  disabled={busy}
+                  title="Typ konta — IKE/IKZE: podatek od sprzedaży zawsze 0 zł"
+                  className="h-7 px-2 rounded-md bg-white/[0.03] border border-white/[0.08] hover:border-white/[0.15] text-[11.5px] text-white outline-none focus:border-accent-violet/50 cursor-pointer disabled:opacity-50"
+                >
+                  <option value="standard" className="bg-ink-900">Standard · PIT 19%</option>
+                  <option value="ike" className="bg-ink-900">IKE · 0 zł</option>
+                  <option value="ikze" className="bg-ink-900">IKZE · 0 zł</option>
+                </select>
                 <Button variant="ghost" size="sm" icon="edit" onClick={() => onRename(it)}>Nazwa</Button>
                 <Button variant="ghost" size="sm" icon="fileText" onClick={() => onDuplicate(it)}>Duplikuj</Button>
                 <button

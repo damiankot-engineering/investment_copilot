@@ -35,6 +35,8 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_ID: str = "default"
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+_ACCOUNT_TYPES: tuple[str, ...] = ("standard", "ike", "ikze")
+_UNSET: object = object()  # sentinel: distinguishes "field omitted" from "set to None"
 
 
 class PortfolioNotFoundError(KeyError):
@@ -151,7 +153,7 @@ class PortfolioRegistry:
     ) -> PortfolioRef:
         """Create a new empty portfolio file ``<dir>/<pid>.yaml``."""
         pid = validate_portfolio_id(pid)
-        if account_type not in ("standard", "ike", "ikze"):
+        if account_type not in _ACCOUNT_TYPES:
             raise PortfolioRegistryError(f"Invalid account_type: {account_type!r}")
         path = self._path_for_new(pid)
         portfolio = Portfolio(
@@ -164,14 +166,39 @@ class PortfolioRegistry:
         logger.info("Created portfolio %s at %s", pid, path)
         return self._ref(pid, path, is_default=False)
 
-    def rename(self, pid: str, name: str | None) -> PortfolioRef:
-        """Set a portfolio's display label (id/filename are unchanged)."""
+    def update_meta(
+        self,
+        pid: str,
+        *,
+        name: str | None | object = _UNSET,
+        account_type: str | object = _UNSET,
+    ) -> PortfolioRef:
+        """Patch a portfolio's metadata in place (label and/or account type).
+
+        Only the keyword arguments actually passed are written — the rest keep
+        the ``_UNSET`` sentinel — so changing the account type never clears the
+        name and vice-versa. Works for the **default** portfolio too, since
+        :meth:`resolve` maps it to the configured ``portfolio.path``.
+        """
         ref = self.resolve(pid)
         if not ref.path.is_file():
             raise PortfolioNotFoundError(f"Portfolio file missing: {ref.path}")
-        portfolio = load_portfolio(ref.path)
-        save_portfolio(portfolio.model_copy(update={"name": (name or None)}), ref.path)
+        updates: dict[str, object] = {}
+        if name is not _UNSET:
+            updates["name"] = name or None
+        if account_type is not _UNSET:
+            if account_type not in _ACCOUNT_TYPES:
+                raise PortfolioRegistryError(f"Invalid account_type: {account_type!r}")
+            updates["account_type"] = account_type
+        if updates:
+            portfolio = load_portfolio(ref.path)
+            save_portfolio(portfolio.model_copy(update=updates), ref.path)
+            logger.info("Updated portfolio %s meta: %s", ref.id, sorted(updates))
         return self._ref(ref.id, ref.path, is_default=ref.is_default)
+
+    def rename(self, pid: str, name: str | None) -> PortfolioRef:
+        """Set a portfolio's display label (id/filename are unchanged)."""
+        return self.update_meta(pid, name=name)
 
     def duplicate(
         self, src_id: str, new_id: str, *, name: str | None = None

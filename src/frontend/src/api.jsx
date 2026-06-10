@@ -193,6 +193,10 @@
       }),
     renamePortfolio:  (id, name) =>
       request('PATCH', `/api/portfolios/${encodeURIComponent(id)}`, { body: { name } }),
+    setPortfolioAccountType: (id, accountType) =>
+      request('PATCH', `/api/portfolios/${encodeURIComponent(id)}`, {
+        body: { account_type: accountType },
+      }),
     duplicatePortfolio: (id, newId, name) =>
       request('POST', `/api/portfolios/${encodeURIComponent(id)}/duplicate`, {
         body: { new_id: newId, name },

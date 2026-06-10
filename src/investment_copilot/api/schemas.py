@@ -419,8 +419,17 @@ class CreatePortfolioRequest(BaseModel):
     account_type: str = "standard"  # standard | ike | ikze (validated downstream)
 
 
-class RenamePortfolioRequest(BaseModel):
+class UpdatePortfolioRequest(BaseModel):
+    """Partial metadata update for a portfolio (PATCH /api/portfolios/{id}).
+
+    Only the fields the client actually sends are applied (the endpoint reads
+    ``model_fields_set``), so changing ``account_type`` never wipes ``name``
+    and vice-versa. ``account_type`` switches a portfolio to a tax-exempt
+    account (IKE/IKZE → 0 PLN rebalancing tax) or back to ``standard``.
+    """
+
     name: str | None = None
+    account_type: Literal["standard", "ike", "ikze"] | None = None
 
 
 class DuplicatePortfolioRequest(BaseModel):

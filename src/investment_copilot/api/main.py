@@ -59,11 +59,11 @@ from investment_copilot.api.schemas import (
     PortfolioRefDTO,
     PortfolioStatusDTO,
     RebalancePlanRequest,
-    RenamePortfolioRequest,
     ReportContentDTO,
     ReportFileDTO,
     RunMonitoringRequest,
     StrategyInfoDTO,
+    UpdatePortfolioRequest,
     WatchlistDTO,
     WatchlistStatusDTO,
 )
@@ -358,18 +358,31 @@ def create_app() -> FastAPI:
         response_model=PortfolioRefDTO,
         tags=["portfolios"],
     )
-    async def rename_portfolio(
+    async def update_portfolio(
         pid: str,
-        body: RenamePortfolioRequest,
+        body: UpdatePortfolioRequest,
         container: Annotated[ServiceContainer, Depends(get_container)],
     ) -> PortfolioRefDTO:
-        """Set a portfolio's display label (id/filename unchanged)."""
+        """Patch a portfolio's metadata: display label and/or account type.
+
+        Only the fields the client sends are applied, so switching a portfolio
+        to IKE/IKZE (``account_type``) doesn't wipe its name. Works for the
+        default portfolio too.
+        """
+        sent = body.model_fields_set
+        kwargs: dict[str, object] = {}
+        if "name" in sent:
+            kwargs["name"] = body.name
+        if "account_type" in sent and body.account_type is not None:
+            kwargs["account_type"] = body.account_type
         try:
             ref = await asyncio.to_thread(
-                container.portfolio_registry.rename, pid, body.name,
+                lambda: container.portfolio_registry.update_meta(pid, **kwargs),
             )
         except PortfolioNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc))
+        except PortfolioRegistryError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
         except PortfolioError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         return _ref_to_dto(ref)
