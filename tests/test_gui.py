@@ -142,7 +142,7 @@ def test_holdings_dataframe_shape() -> None:
     df = holdings_dataframe(_portfolio(), _status())
     assert list(df.columns) == [
         "Ticker", "Name", "Shares", "Entry", "Last", "Last date",
-        "Cost basis", "Value", "PnL", "PnL%",
+        "Cost basis", "Value", "Weight", "PnL", "PnL%",
     ]
     assert len(df) == 2
 

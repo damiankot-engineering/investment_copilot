@@ -77,6 +77,13 @@ class FakeData:
         self.calls.append({"ticker": ticker, "since": since, "limit": limit})
         return list(self.news_by_ticker.get(ticker, []))
 
+    def load_ohlcv(self, ticker: str):
+        # No cached OHLCV in these tests → metrics block renders as "brak danych".
+        return None
+
+    def load_benchmark(self, symbol: str):
+        return None
+
 
 # --- Fixtures --------------------------------------------------------------
 
@@ -179,7 +186,8 @@ def test_analyze_portfolio_returns_typed_result_and_passes_polish_context() -> N
     svc = _service(llm, data)
     result = svc.analyze_portfolio(_portfolio(), _status())
 
-    assert result is expected
+    # Equality, not identity: the service returns a citation-validated copy.
+    assert result == expected
     call = llm.calls[0]
     assert call["response_schema"] is PortfolioAnalysis
     assert call["model"] == "custom-analysis"
@@ -267,7 +275,8 @@ def test_detect_risks_uses_risk_schema_and_template() -> None:
 
     result = svc.detect_risks(_portfolio(), _status())
 
-    assert result is expected
+    # Equality, not identity: the service returns a citation-validated copy.
+    assert result == expected
     assert llm.calls[0]["response_schema"] is RiskAlerts
     assert "ryzyka" in llm.calls[0]["system_prompt"].lower()
 

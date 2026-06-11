@@ -26,14 +26,24 @@ from investment_copilot.domain.prompts import (
     RiskAlerts,
 )
 from investment_copilot.infrastructure.llm import LLMError
+from investment_copilot.infrastructure.providers import (
+    BiznesRadarProvider,
+    StooqFundamentalsProvider,
+)
 from investment_copilot.infrastructure.storage import ParquetCache, SQLiteStore
 from investment_copilot.orchestrator import Orchestrator
 from investment_copilot.services.backtest_service import BacktestService
+from investment_copilot.services.calendar_service import CalendarService
+from investment_copilot.services.company_report_service import CompanyReportService
 from investment_copilot.services.container import ServiceContainer
 from investment_copilot.services.copilot_service import CopilotService
 from investment_copilot.services.data_service import DataService
+from investment_copilot.services.monitoring_service import MonitoringService
+from investment_copilot.services.portfolio_registry import PortfolioRegistry
 from investment_copilot.services.portfolio_service import PortfolioService
+from investment_copilot.services.rebalance_service import RebalanceService
 from investment_copilot.services.report_service import ReportService
+from investment_copilot.services.watchlist_service import WatchlistService
 
 
 # --- Stubs -----------------------------------------------------------------
@@ -130,6 +140,32 @@ def _make_container(tmp_path: Path) -> tuple[ServiceContainer, FakeMarket, FakeN
     )
     cfg = AppConfig(llm=LLMConfig(api_key="x"), backtest=bt_cfg)
 
+    # Services the orchestrator pipelines don't exercise, but the container
+    # requires. Constructed inert (no network until a method is called).
+    portfolio_registry = PortfolioRegistry(
+        portfolios_dir=tmp_path / "portfolios",
+        default_path=tmp_path / "portfolio.yaml",
+    )
+    rebalance = RebalanceService(rebalance_config=cfg.rebalance)
+    monitoring = MonitoringService(
+        copilot_service=copilot,
+        data_service=data,
+        portfolio_service=portfolio,
+        sqlite_store=sqlite,
+        biznesradar_provider=BiznesRadarProvider(),
+        fundamentals_provider=StooqFundamentalsProvider(),
+    )
+    watchlist = WatchlistService(data_service=data)
+    calendar = CalendarService(monitoring_service=monitoring)
+    company_report = CompanyReportService(
+        data_service=data,
+        portfolio_service=portfolio,
+        sqlite_store=sqlite,
+        llm_client=llm,
+        llm_config=LLMConfig(api_key="x"),
+        biznesradar_provider=BiznesRadarProvider(),
+    )
+
     container = ServiceContainer(
         config=cfg,
         sqlite_store=sqlite,
@@ -139,8 +175,14 @@ def _make_container(tmp_path: Path) -> tuple[ServiceContainer, FakeMarket, FakeN
         llm_client=llm,
         data_service=data,
         portfolio_service=portfolio,
+        portfolio_registry=portfolio_registry,
+        rebalance_service=rebalance,
         backtest_service=backtest,
         copilot_service=copilot,
+        monitoring_service=monitoring,
+        watchlist_service=watchlist,
+        calendar_service=calendar,
+        company_report_service=company_report,
     )
     return container, market, news_provider, llm
 

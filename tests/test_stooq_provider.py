@@ -45,9 +45,10 @@ def test_fetch_ohlcv_happy_path() -> None:
     assert len(df) == 3
     assert list(df.columns) == ["open", "high", "low", "close", "volume"]
     assert df["close"].iloc[-1] == pytest.approx(79.10)
-    # URL params include normalized symbol
+    # The authenticated endpoint takes the suffix-stripped form (pkn.pl -> pkn);
+    # the full "pkn.pl" is only retried as a fallback.
     call = session.get.call_args
-    assert call.kwargs["params"]["s"] == "pkn.pl"
+    assert call.kwargs["params"]["s"] == "pkn"
     assert call.kwargs["params"]["d1"] == "20240101"
     assert call.kwargs["params"]["d2"] == "20240131"
     assert call.kwargs["params"]["i"] == "d"
@@ -61,7 +62,8 @@ def test_fetch_benchmark_resolves_symbol() -> None:
 
     # Volume defaulted to 0 since indices don't supply it
     assert (df["volume"] == 0.0).all()
-    assert session.get.call_args.kwargs["params"]["s"] == "^wig20"
+    # The authenticated endpoint takes the caret-stripped index symbol.
+    assert session.get.call_args.kwargs["params"]["s"] == "wig20"
 
 
 def test_fetch_no_data_response_raises() -> None:

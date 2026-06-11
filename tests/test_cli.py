@@ -392,6 +392,9 @@ def test_generate_report_happy_path(cli_env, tmp_path: Path) -> None:
         result = runner.invoke(
             app,
             ["--config", str(cli_env["config"]), "generate-report"],
+            # Wide console so Rich doesn't wrap the long temp path inside the
+            # "Report written" panel (default CliRunner width is 80).
+            env={"COLUMNS": "200"},
         )
     assert result.exit_code == 0
     assert "Report written" in result.stdout

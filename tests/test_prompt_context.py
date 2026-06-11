@@ -98,7 +98,8 @@ def test_render_status_includes_totals_and_rows() -> None:
         missing_data=["cdr.pl"],
     )
     out = render_status(status)
-    assert "Total cost basis" in out
+    assert "Total market value" in out
+    assert "Unrealized PnL" in out
     assert "Missing market data" in out and "cdr.pl" in out
     assert "+10.00%" in out  # total PnL%
     assert "1,100.00" in out  # total market value
