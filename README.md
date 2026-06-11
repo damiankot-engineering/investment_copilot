@@ -16,14 +16,17 @@ Designed to be:
 - **Polish-market-first** — Stooq for OHLCV (full GPW history, free API key required), RSS feeds (Bankier, Money.pl) for news, WIG20 as the default benchmark.
 - **Three surfaces over one core** — CLI (Typer), Streamlit GUI, and a FastAPI + React web dashboard, all driving the same `ServiceContainer` + `Orchestrator`.
 
-![Investment Copilot — Web GUI](docs/web-gui-screenshot.png)
-<sub>_Web GUI — Portfolio tab: live PnL, holdings table, and allocation donut._</sub>
+![Investment Copilot — Portfolio tab](docs/web-gui-screenshot.png)
+<sub>_Portfolio tab — live PnL, holdings table, and allocation donut._</sub>
+
+![Investment Copilot — Rebalancing tab](docs/web-gui-rebalance-screenshot.png)
+<sub>_Rebalancing — current vs target weights and a self-financing BUY/SELL plan with the FIFO realized-gain + PIT tax preview (zero on IKE/IKZE), turnover, and an explicit Zastosuj that writes the trades._</sub>
+
+![Investment Copilot — Monitoring tab](docs/web-gui-monitoring-screenshot.png)
+<sub>_Monitoring — per-company factsheets (BiznesRadar YoY, P/E, market cap) plus the portfolio's upcoming earnings and dividend calendar, with an on-demand AI report per holding._</sub>
 
 ![Investment Copilot — Watchlist tab](docs/web-gui-watchlist-screenshot.png)
 <sub>_Watchlist — research tickers with optional target buy prices, distance to target, and a 30-day news count, refreshed alongside portfolio data._</sub>
-
-![Investment Copilot — Kalendarz tab](docs/web-gui-calendar-screenshot.png)
-<sub>_Kalendarz — upcoming earnings reports and dividend dates per holding, drawn from the latest BiznesRadar data._</sub>
 
 ---
 
