@@ -57,7 +57,7 @@ class StooqProvider:
         self._api_key = api_key or os.environ.get("STOOQ_API_KEY") or ""
         self._session = session or requests.Session()
         self._session.headers.setdefault(
-            "User-Agent", "investment-copilot/0.1 (+https://stooq.com)"
+            "User-Agent", "investment-copilot/1.0 (+https://stooq.com)"
         )
 
     # -- Public API ----------------------------------------------------------

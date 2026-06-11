@@ -265,7 +265,7 @@ After install, the `invcopilot` command is available on `PATH`:
 
 ```bash
 uv run invcopilot version
-# investment-copilot 0.1.0
+# investment-copilot 1.0.0
 ```
 
 ### First-run configuration
