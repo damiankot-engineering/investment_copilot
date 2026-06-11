@@ -17,16 +17,13 @@ Designed to be:
 - **Three surfaces over one core** — CLI (Typer), Streamlit GUI, and a FastAPI + React web dashboard, all driving the same `ServiceContainer` + `Orchestrator`.
 
 ![Investment Copilot — Web GUI](docs/web-gui-screenshot.png)
-<sub>_Web GUI — Portfolio tab. Regenerate with `python docs/_capture_screenshot.py` while uvicorn runs on port 8765._</sub>
-
-![Investment Copilot — Analiza AI tab](docs/web-gui-analysis-screenshot.png)
-<sub>_Analiza AI — confidence badge, risk overview, grounded alerts with citation chips, and the same quant metrics block (HHI, returns, correlations) the LLM was citing. The standalone tab is now hidden from the sidebar (the `/api/analysis` backend remains; per-company AI lives in Monitoring). Regenerate with `python docs/_capture_analysis_screenshot.py`._</sub>
+<sub>_Web GUI — Portfolio tab: live PnL, holdings table, and allocation donut._</sub>
 
 ![Investment Copilot — Watchlist tab](docs/web-gui-watchlist-screenshot.png)
-<sub>_Watchlist — research tickers with optional target buy prices, distance to target, and 30-day news count (updated together with portfolio data via the same "Odśwież dane rynkowe" button)._</sub>
+<sub>_Watchlist — research tickers with optional target buy prices, distance to target, and a 30-day news count, refreshed alongside portfolio data._</sub>
 
 ![Investment Copilot — Kalendarz tab](docs/web-gui-calendar-screenshot.png)
-<sub>_Kalendarz — upcoming earnings reports parsed from the latest monitoring snapshot's BiznesRadar data (next_report_estimated_date per holding). Annual dividend estimates appear when BR returns a non-zero dividend yield. Empty until the first **Monitoring → Uruchom snapshot**._</sub>
+<sub>_Kalendarz — upcoming earnings reports and dividend dates per holding, drawn from the latest BiznesRadar data._</sub>
 
 ---
 
@@ -67,19 +64,19 @@ For automation / cron, see [CLI usage](#cli-usage). For full setup details and o
 - **Multi-portfolio** — keep several named portfolios as `portfolios/*.yaml` (filename stem = id; the configured `portfolio.yaml` is the `default`). A switcher in the dashboard top bar plus full create / rename / duplicate / delete (soft-delete to `.trash`) from the UI. Every portfolio-scoped API call carries `?portfolio=<id>`, resolved by a single dependency, so the whole backend is portfolio-aware. Each portfolio has an `account_type` (`standard` / `ike` / `ikze`) that drives tax treatment; the watchlist stays a single global list.
 - **Free, fast data** — daily OHLCV from Stooq for any GPW ticker (free API key required, see [API keys](#api-keys)). Indices (`wig20`, `mwig40`, etc.) and equities are queried through the same adapter.
 - **News aggregation** — multiple Polish RSS feeds plus best-effort scraping of Stooq's per-symbol news block. Persisted in SQLite, deduplicated by URL, queryable per ticker. A headline is attached to a company only when it **names the company in the title** — matching is on the company's **identity** (ticker stem + brand name from the display name) at **word boundaries**, not broad substring keywords. This keeps a brokerage like XTB from collecting every market story that merely quotes its analysts, and keeps thematic terms (`akcje`, `e-commerce`) from flooding a holding.
-- **Backtesting** — portfolio-level simulator with three strategies (MA-crossover, time-series momentum, buy & hold). Equal-weight across active sleeves, daily checks, end-of-day fills, no leverage, no shorts, zero costs (v1). Equity curve and a full metrics suite (total / annualized return, volatility, Sharpe @ 252, max drawdown with duration, win rate). Configurable benchmark (`wig20` / `mwig40` / `swig80` / `wig` / `wig30` / arbitrary Stooq ticker) buy-and-hold in the same window. The web Backtest tab **auto-runs on load** with the default config (Buy & Hold + the configured benchmark/window), failing silently to the empty state when data is missing.
+- **Backtesting** — portfolio-level simulator with three strategies (MA-crossover, time-series momentum, buy & hold). Equal-weight across active sleeves, daily checks, end-of-day fills, no leverage, no shorts, zero transaction costs. Equity curve and a full metrics suite (total / annualized return, volatility, Sharpe @ 252, max drawdown with duration, win rate). Configurable benchmark (`wig20` / `mwig40` / `swig80` / `wig` / `wig30` / arbitrary Stooq ticker) buy-and-hold in the same window. The web Backtest tab **auto-runs on load** with the default config (Buy & Hold + the configured benchmark/window), failing silently to the empty state when data is missing.
 - **Rebalancing engine** — compute the BUY/SELL trades that move current weights toward a target allocation (per-holding `target_weight`, or equal-weight fallback), **self-financing within the current portfolio value**. Whole-share rounding (GPW), a drift band (no-trade zone), a min-trade filter, turnover, and a **FIFO realized-gain + Polish PIT (19%) tax preview** that is **zero for tax-exempt accounts (IKE/IKZE)**. The plan is read-only; an explicit **Zastosuj** appends the trades as transactions to the portfolio (with a `.bak` backup). Portfolio-scoped like everything else.
 - **Groq copilot** — three structured analyses with Polish output: portfolio summary, risk alerts, thesis update. JSON-mode + Pydantic validation, automatic self-correction on schema violations, exponential backoff on transient errors, fast-fail on auth errors.
 - **Grounded analysis** — quantitative metrics (HHI, top-3 concentration, per-holding 30/90/252d returns, distance from 52w high, annualized volatility, beta vs benchmark, top pairwise correlations) are computed in Python and injected into the prompt; the LLM cites specific `metric:KEY` / `news:N` / `fundamentals:TICKER.field` / `previous_report:LABEL` references; hallucinated citations are stripped Python-side before the result reaches the user. The last 2 Markdown reports are folded back in as RAG context so each run is framed as a delta over prior assessments.
 - **Watchlist** — tickers you research but don't own. Separate `watchlist.yaml` (gitignored alongside `portfolio.yaml`), optional `target_buy_price` per item (UI flags when current price hits the target), last price from the same OHLCV cache. **Update data** refreshes watchlist OHLCV alongside portfolio holdings and merges watchlist keywords into the RSS news pipeline, so each item shows a 30-day news count next to its price. A dedicated **Odśwież ceny** button on the Watchlist tab runs a scoped refresh (watchlist tickers only, no benchmark/portfolio) when you just want fresh prices without the full pipeline. Each row **expands into a full monitoring report** — the same deterministic factsheet + on-demand AI report as a portfolio holding (the per-company endpoints resolve a ticker against the portfolio *or* the watchlist, dropping the position-only sections when it has no holding). Edit through the Web GUI dialog or the YAML directly.
 - **Per-company monitoring** — each holding gets its own snapshot card with a **deterministic factsheet** (BR YoY for revenue/EBITDA/net profit, P/E, market cap, 52w range from OHLCV overlay, position PnL, sector, last quarter, next report countdown, **Top-3 news with sentiment dots**). The KPI grid + market + news + calendar render instantly with no LLM call. A **Generuj raporty AI (wszystkie)** button on the tab generates the AI report for every holding sequentially (one focused LLM call per ticker, regenerating all). Click **Generate AI report** on a card to run a focused LLM call per ticker (TL;DR + 3-5 strengths + 3-5 risks + a **`change_since_last`** delta vs the previous report, ~1.5k input tokens). Every strength/risk carries a `citations` list of grounding keys (`metric:` / `news:N` / `fundamentals:field` / `thesis` / `portfolio:field`) — the model is pushed to cite **≥2 sources per bullet** when the context offers them, and each citation is verified Python-side; unknown keys are stripped and a bullet that loses all of them is dropped. Generating a report also runs a **cheap-model news-sentiment pass** (positive / negative / neutral, cached per URL) whose tags both ground the analysis and light up the factsheet's news dots. The previous report is folded into the prompt so the model frames what changed since last time. The whole portfolio's upcoming-events calendar sits at the top of the tab. Each report is downloadable as a **standalone HTML** one-pager (light/dark themes, Fraunces serif + JetBrains Mono), persisted per-ticker in SQLite. Replaces the legacy bulk-snapshot flow, which kept blowing past Groq's 12k TPM limit.
 - **Dividend calendar + yield** — BiznesRadar's `/dywidenda` page is scraped per ticker (7-day SQLite cache) into typed `DividendEvent`s with amount per share, **ex-dividend (D-day) date**, payment date, AGM date and status. Upcoming D-days and payments are merged with estimated earnings-report dates into the chronological "Najbliższe wydarzenia" list at the top of the Monitoring tab. A **trailing dividend yield** (latest annual dividend ÷ current price) is computed for the factsheet, since BR's own yield column is JS-rendered and absent from the static HTML.
-- **AI analysis cache** — the portfolio analysis bundle (summary + risk alerts + quant metrics) is persisted in SQLite keyed by a hash of the portfolio content, so a repeat run shows the previous result instantly without spending tokens. The cache is **auto-invalidated on `update-data`** (fresh prices/news = stale analysis). The standalone **Analiza AI** tab is currently **hidden from the sidebar** (the `/api/analysis` endpoints + cache are retained); per-company AI narratives now live in the Monitoring tab.
+- **AI analysis cache** — the portfolio analysis bundle (summary + risk alerts + quant metrics) is persisted in SQLite keyed by a hash of the portfolio content, so a repeat run shows the previous result instantly without spending tokens. The cache is **auto-invalidated on `update-data`** (fresh prices/news = stale analysis). The bundle is served by `/api/analysis`; per-company AI narratives live in the Monitoring tab.
 - **Live progress streaming** — `update-data` is also exposed as a Server-Sent Events endpoint. The web UI swaps its indeterminate shimmer for a **determinate progress bar** with a per-ticker status line (`OHLCV cbf.pl (3/6)` → benchmark → news → done) driven by the same pipeline the POST endpoint runs.
 - **CLI** — Typer-based commands (`update-data`, `run-analysis`, `backtest`, `generate-report`) with Rich-rendered tables, severity-coloured risk panels, sensible exit codes, and graceful degradation when the LLM is unreachable.
-- **Markdown reports** — generated to `reports/`, fully Polish, with portfolio table, backtest metrics vs benchmark, AI sections, and warnings. The standalone **Raporty** tab is **hidden from the UI** (the `/api/reports` endpoints + CLI `generate-report` remain) — reports now live per feature (per-company HTML one-pager, backtest), not as one concatenated tab.
+- **Markdown reports** — the CLI `generate-report` and `/api/reports` produce a full Polish report to `reports/`: portfolio table, backtest metrics vs benchmark, AI sections, and warnings. In the dashboard, reporting lives per feature instead (the per-company HTML one-pager and the backtest tab).
 - **Local persistence** — SQLite for news + metadata, parquet for OHLCV. Restart-safe, queryable, no ORM overhead.
-- **API-first design** — `ServiceContainer` constructs every service from `AppConfig`; the same wiring will power a future FastAPI app via `Depends(get_container)`.
+- **API-first design** — `ServiceContainer` constructs every service from `AppConfig`; the FastAPI app reuses the same wiring via `Depends(get_container)`, so the CLI, Streamlit, and web surfaces share one core.
 
 ---
 
@@ -167,7 +164,7 @@ The LLM is treated as an **interpreter**, never a calculator. Three layers of gr
 
 The output schemas (`HoldingComment`, `RiskAlert`) require a `citations: list[Citation]` field; the system prompt mandates ≥1 citation per claim. After the LLM returns, `_validate_*_citations()` checks every reference against a `CitationRegistry` built from the same sources fed into the prompt — **unknown references are dropped, hallucinations are logged**. Lenient by design: the model is encouraged to over-cite rather than fabricate, and we strip the bad ones rather than failing the whole run.
 
-The Web GUI surfaces all of this so the user can spot-check: the **Analiza AI** tab renders a `Metryki ilościowe` card with HHI / top-3 / per-holding returns / top correlations next to the LLM output, plus colored citation chips under each risk alert and thesis update. Confidence (1-10) and the risk overview text are visible in the header. See the [analysis screenshot](docs/web-gui-analysis-screenshot.png).
+The grounding is surfaced for spot-checking rather than hidden: `/api/analysis` returns the quant-metrics block (HHI / top-3 / per-holding returns / correlations) alongside the LLM output and confidence score, and the per-company Monitoring reports render every strength and risk with its `[metric:…]` / `[news:N]` citation chips.
 
 ### Project layout
 
@@ -190,7 +187,7 @@ investment-copilot/
 │   │   ├── models.py                 # core types (Ticker, NewsItem, ...)
 │   │   ├── portfolio.py              # Transaction, Holding (FIFO), Portfolio, status
 │   │   ├── watchlist.py              # WatchlistItem, Watchlist (research tickers)
-│   │   ├── calendar.py               # CalendarEvent, CalendarBundle (legacy aggregator)
+│   │   ├── calendar.py               # CalendarEvent, CalendarBundle (events aggregator)
 │   │   ├── fundamentals.py           # fundamentals + DividendEvent + monitoring snapshots
 │   │   ├── company_report.py         # CompanyReport (per-ticker snapshot schema)
 │   │   ├── analysis_metrics.py       # HHI, beta, returns, correlations, CitationRegistry
@@ -213,8 +210,8 @@ investment-copilot/
 │   │   ├── copilot_service.py        # LLM analyses + citation validation
 │   │   ├── analysis_history.py       # RAG loader over reports/*.md
 │   │   ├── watchlist_service.py      # watchlist YAML + status enrichment
-│   │   ├── calendar_service.py       # legacy events aggregator (still wired)
-│   │   ├── monitoring_service.py     # legacy bulk-snapshot pipeline (still wired)
+│   │   ├── calendar_service.py       # events aggregator (feeds /api/calendar)
+│   │   ├── monitoring_service.py     # snapshot pipeline (fundamentals + dividends)
 │   │   ├── company_report_service.py # per-ticker factsheet + AI report + kv_cache
 │   │   ├── report_service.py
 │   │   ├── container.py              # ServiceContainer factory
@@ -328,8 +325,8 @@ Investment Copilot resolves environment variables inside `config.yaml` using `${
 |---|---|---|
 | `GROQ_API_KEY` | yes | `llm.api_key` (Groq calls) |
 | `STOOQ_API_KEY` | yes | Stooq OHLCV CSV endpoint |
-| `NEWSAPI_KEY` | no | optional NewsAPI provider (placeholder; not wired in v1) |
-| `ALPHA_VANTAGE_KEY` | no | optional Alpha Vantage fundamentals (placeholder; v2) |
+| `NEWSAPI_KEY` | no | optional NewsAPI provider (not enabled by default) |
+| `ALPHA_VANTAGE_KEY` | no | optional Alpha Vantage fundamentals (planned) |
 
 - **Groq key** — <https://console.groq.com/keys>. The free tier is generous enough for routine use.
 - **Stooq key** — visit <https://stooq.pl/q/d/?s=pkn.pl&get_apikey>, complete the captcha, and copy the `apikey` value from the generated download URL. The key is free and does not expire.
@@ -341,10 +338,10 @@ If a referenced env var is missing **and** has no default, the CLI exits with a 
 ## Example `config.yaml`
 
 ```yaml
-# All sections are optional except `llm.api_key`. Defaults match v1 spec.
+# All sections are optional except `llm.api_key`; every key below shows its default.
 
 providers:
-  market_data: stooq                  # only "stooq" supported in v1
+  market_data: stooq                  # only "stooq" is supported
   news:                               # ordered list; each provider is queried
     - stooq
     - rss
@@ -482,7 +479,7 @@ Three surfaces sit over the same `ServiceContainer` + `Orchestrator`. Pick the o
 |---|---|---|---|
 | **Web GUI** (FastAPI + React) | Daily interactive review, editing the portfolio, charts | `uv pip install -e ".[api]"` | `uv run uvicorn investment_copilot.api.main:app --port 8000` |
 | **CLI** (Typer) | Cron jobs, scripted refresh, headless servers | _(core install)_ | `uv run invcopilot --help` |
-| **Streamlit GUI** | Legacy local poking, single-file alternative to the React UI | `uv pip install -e ".[gui]"` | `uv run streamlit run streamlit_app.py` |
+| **Streamlit GUI** | A single-file local alternative to the React UI | `uv pip install -e ".[gui]"` | `uv run streamlit run streamlit_app.py` |
 
 All three read the same `config.yaml`, `portfolio.yaml`, and `GROQ_API_KEY` / `STOOQ_API_KEY` env vars — there's no separate state.
 
@@ -499,7 +496,7 @@ uv run uvicorn investment_copilot.api.main:app --port 8000
 
 Uvicorn binds **127.0.0.1** by default — single-user, no auth. Do not pass `--host 0.0.0.0` without putting auth in front. Add `--reload` during development to pick up Python changes automatically.
 
-A **portfolio switcher** in the top bar (backed by `/api/portfolios`) selects the active portfolio and threads `?portfolio=<id>` into every call; switching reloads all tabs. The standalone **AI Analysis** and **Reports** tabs are hidden from the sidebar (their endpoints remain — see [Web API reference](#web-api-reference)).
+A **portfolio switcher** in the top bar (backed by `/api/portfolios`) selects the active portfolio and threads `?portfolio=<id>` into every call; switching reloads all tabs. The dashboard's tabs are Portfolio, Watchlist, Backtest, Rebalancing, and Monitoring; the portfolio-level AI analysis and Markdown reports stay available through the API ([Web API reference](#web-api-reference)).
 
 | Tab | Endpoints | What it does |
 |---|---|---|
@@ -520,7 +517,7 @@ uv pip install -e ".[gui]"
 uv run streamlit run streamlit_app.py        # http://localhost:8501
 ```
 
-Four tabs (Portfolio / Backtest / AI Analysis / Reports) over the same orchestrator pipelines. Kept around for users who prefer one-file Python over a React app. The web GUI is the recommended surface going forward.
+Four tabs (Portfolio / Backtest / AI Analysis / Reports) over the same orchestrator pipelines, for users who prefer one-file Python over a React app. The web GUI is the recommended surface.
 
 ### CLI
 
@@ -698,7 +695,7 @@ Every **portfolio-scoped** endpoint (anything that reads or writes a portfolio) 
 | GET | `/api/portfolio/status` | — | `PortfolioStatusDTO` with live PnL, realized PnL + transaction count per holding |
 | GET | `/api/portfolios` | — | list of `PortfolioRefDTO` (`id`, `name`, `is_default`, `n_holdings`, `account_type`) |
 | POST | `/api/portfolios` | `{id, name?, base_currency?, account_type?}` | create an empty portfolio file (201) |
-| PATCH | `/api/portfolios/{id}` | `{name}` | rename the display label |
+| PATCH | `/api/portfolios/{id}` | `{name?, account_type?}` | update the display label and/or switch the account type (`standard` / `ike` / `ikze`) |
 | POST | `/api/portfolios/{id}/duplicate` | `{new_id, name?}` | copy holdings into a new portfolio (201) |
 | DELETE | `/api/portfolios/{id}` | — | soft-delete to `portfolios/.trash/` (204; the default can't be deleted) |
 | POST | `/api/data/update` | `?news_days_back=14` | `DataUpdateResult` (OHLCV updated/failed, benchmark rows, news inserted). Invalidates the cached analysis. |
@@ -802,11 +799,9 @@ curl -s -X POST 'http://localhost:8000/api/rebalance/plan?portfolio=default' \
 - **Dividends scraped on a slow cadence.** BiznesRadar's `/dywidenda/{TICKER}` page is parsed into `DividendEvent`s and cached 7 days (dividend schedules rarely change), separate from the 24h fundamentals cache. Failures degrade silently to no dividend rows rather than faulting the monitoring calendar. The page's own "stopa dywidendy" column is JS-rendered (empty in static HTML), so the factsheet derives a **trailing yield** = latest fiscal-year dividend per share ÷ current close instead.
 - **Citations are a list, verified per key.** Each AI strength/risk bullet carries `citations: list[str]`; the prompt asks for ≥2 sources when the context provides them, and `_call_llm_narrative` keeps only the keys present in the per-ticker registry. A bullet that loses *some* citations survives with the valid subset; one that loses *all* of them is dropped as an unsupported claim. The renderer (React + standalone HTML) shows each surviving key as a `[metric:…]` chip and still accepts the legacy single-`citation` shape from older cached reports.
 - **News sentiment is a separate cheap call, cached per URL.** `generate_report` classifies the ticker's recent headlines as positive/negative/neutral via the small summary model (`model_summary`) in one batch call, keyed in `kv_cache` under `news_sentiment:{sha256(url)[:16]}`. Because a fixed headline's sentiment never changes, the cache TTL is effectively infinite — the factsheet (which must stay LLM-free) reads it back and renders coloured dots, showing "unrated" for any headline not yet classified.
-- **Historical delta framing.** Before regenerating, the service loads the previously cached `CompanyReport` and folds a compact carry-over (prior TL;DR + confidence + top risks) into the prompt, asking for a `change_since_last` field. Old caches written before the schema grew (`change_since_last`, `news`, list citations) fail validation on load and are treated as "no prior" — the next regeneration repopulates them.
+- **Historical delta framing.** Before regenerating, the service loads the previously cached `CompanyReport` and folds a compact carry-over (prior TL;DR + confidence + top risks) into the prompt, asking for a `change_since_last` field. A cached report that no longer validates against the current schema is treated as "no prior", and the next regeneration repopulates it.
 - **News matched on company identity, not keywords.** `domain/news_match.py` reduces a holding to its identity terms (ticker stem + brand from `name`) and matches them at **word boundaries on the headline only** (`compile_identity_matcher`). This replaced case-insensitive OR-substring matching across the full `keywords` list, which let broad sector terms (`akcje`, `e-commerce`) and quoted-source name-drops (`…analityk XTB` in an unrelated story) flood a holding. The filter runs at fetch time (RSS) and again as a read-time safety net in `_load_news`, so rows stamped under the old matcher drop out immediately.
 - **Rebalancing is self-financing + FIFO-tax-aware.** `compute_rebalance` (pure) scales targets to the current total market value, so sells fund buys and whole-share rounding leaves only a small residual cash (surfaced as a warning if buys exceed sells). Each SELL's realized PnL is computed exactly by reusing the FIFO matcher (`preview_realized_pnl` walks `transactions + [synthetic SELL]`), and the 19% PIT preview is zeroed when the portfolio's `account_type` is `ike`/`ikze`. `POST /api/rebalance/apply` recomputes the plan server-side (never trusts a client-submitted plan) and appends the trades as transactions, re-validating FIFO on construction.
-- **Backtest auto-extends benchmark cache.** When the user picks a start date earlier than the current benchmark cache earliest date, `BacktestService._ensure_benchmark_covers()` triggers a refresh from `start - 5 days` before loading. Best-effort: if the refresh fails (offline / rate limit), the backtest falls through to whatever is on disk rather than aborting.
-- **Per-company monitoring split.** The new architecture (`/api/companies/*`) replaces the legacy single-call `/api/monitoring` pipeline. Splitting the LLM work to ONE focused per-ticker call (~1.5k input tokens, must-cite output) keeps every request well under Groq's 12k TPM cap, isolates failures (one ticker failing no longer wrecks the whole snapshot), and gives the user fine-grained control over when to spend tokens. The deterministic factsheet renders without any LLM call. Generated reports are persisted in SQLite (`kv_cache` table, key `company_report:{ticker}`) so the next page load shows the prior AI report immediately.
 - **Backtest auto-extends benchmark cache.** When the user picks a start date earlier than the current benchmark cache earliest date, `BacktestService._ensure_benchmark_covers()` triggers a refresh from `start - 5 days` before loading. Best-effort: if the refresh fails (offline / rate limit), the backtest falls through to whatever is on disk rather than aborting.
 - **Wire DTOs decouple frontend from domain.** Domain models use field names like `total_market_value` / `unrealized_pnl_pct` (fractions); the frontend sees `total_value` / `pnl_pct` (percent). Adapters in `api/adapters.py` translate at the wire boundary so neither side has to care about the other's naming. Tickers come back in both forms (`ticker: 'pkn.pl'`, `display_ticker: 'PKN'`).
 - **Sync internals, threaded boundary.** Services and providers are synchronous (Stooq, Groq, BiznesRadar). The API wraps every pipeline call in `asyncio.to_thread`, which is enough for single-user local use. If you ever expose this beyond localhost, replace providers with async-native clients rather than keeping the thread pool growing.
@@ -814,7 +809,7 @@ curl -s -X POST 'http://localhost:8000/api/rebalance/plan?portfolio=default' \
 - **Path overrides via env.** `COPILOT_CONFIG` and `COPILOT_PORTFOLIO` work the same as for the CLI; resolved once at startup.
 - **Filename safety.** All `*/reports/{name}` routes validate `name` against `^[A-Za-z0-9._-]+$` and reject `..`, so a malicious client can't escape the reports directory.
 
-### What v1 deliberately doesn't have
+### Out of scope (by design)
 
 - **No auth.** Single-user assumed. Bind to `127.0.0.1` (uvicorn default with `--host` unset is `127.0.0.1`); do not expose this directly to the internet without adding an auth dependency.
 - **No background scheduler.** `update-data` is on-demand. A deployment would add cron / APScheduler.
