@@ -327,12 +327,12 @@ Investment Copilot resolves environment variables inside `config.yaml` using `${
 | Variable | Required | Used by |
 |---|---|---|
 | `GROQ_API_KEY` | yes | `llm.api_key` (Groq calls) |
-| `STOOQ_API_KEY` | yes | Stooq OHLCV CSV endpoint |
+| `STOOQ_API_KEY` | no longer used | Stooq retired apikey CSV access behind a browser anti-bot gate (see [Troubleshooting](#troubleshooting)); the key is no longer sent. |
 | `NEWSAPI_KEY` | no | optional NewsAPI provider (not enabled by default) |
 | `ALPHA_VANTAGE_KEY` | no | optional Alpha Vantage fundamentals (planned) |
 
 - **Groq key** — <https://console.groq.com/keys>. The free tier is generous enough for routine use.
-- **Stooq key** — visit <https://stooq.pl/q/d/?s=pkn.pl&get_apikey>, complete the captcha, and copy the `apikey` value from the generated download URL. The key is free and does not expire.
+- **Stooq key** — historically required for the OHLCV CSV endpoint. Stooq has since put that endpoint behind a JavaScript anti-bot gate and denies automated downloads, so `STOOQ_API_KEY` no longer has any effect and is no longer sent (see [Troubleshooting](#troubleshooting)).
 
 If a referenced env var is missing **and** has no default, the CLI exits with a clear `error:` line and code `1` — the application never starts in a half-configured state.
 
@@ -735,7 +735,7 @@ The API resolves config and portfolio paths from these env vars at startup (no f
 | `COPILOT_PORTFOLIO` | _(value in `config.yaml`)_ | API + CLI |
 | `COPILOT_WATCHLIST` | `watchlist.yaml` next to the default portfolio | API only |
 | `GROQ_API_KEY` | — (required for AI / monitoring) | LLM client |
-| `STOOQ_API_KEY` | — (required for OHLCV) | Stooq provider |
+| `STOOQ_API_KEY` | — (no longer used; see [Troubleshooting](#troubleshooting)) | Stooq provider |
 
 ```bash
 # Multiple portfolios are first-class now: drop files into portfolios/<id>.yaml
@@ -825,6 +825,7 @@ curl -s -X POST 'http://localhost:8000/api/rebalance/plan?portfolio=default' \
 
 | Symptom | Cause / fix |
 |---|---|
+| Market-data refresh fails for every ticker with **"Stooq blocked automated CSV download"** (or cryptic 404s) | A Stooq-side change, not a bug. Stooq put its CSV download behind a **JavaScript proof-of-work anti-bot gate** and now denies non-browser clients (`Odmowa dostępu`) — even a headless browser with the gate solved and cookies set. The legacy `STOOQ_API_KEY` no longer helps and is no longer sent. The download still works in your normal browser; an automation-friendly OHLCV source (or a manual-CSV import path) is the way forward. The provider now reports this clearly instead of failing obscurely. |
 | `/api/analysis` returns **502 LLM error** | `GROQ_API_KEY` missing or invalid. Set it in `.env`, restart uvicorn. The CLI errors out the same way. |
 | Backtest returns **400 "No OHLCV data available"** | Cache is empty. Click **Odśwież dane rynkowe** in the Portfolio tab (or `invcopilot update-data`) first. |
 | Equity curve shows wild values like **+30000%** | Stale uvicorn — adapter changes haven't loaded. Restart the process, or launch with `--reload`. |

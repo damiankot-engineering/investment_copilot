@@ -38,6 +38,16 @@ class _NoDataError(Exception):
     """Internal signal: Stooq returned 'no data' for a symbol candidate."""
 
 
+def _blocked_access_msg(symbol: str, reason: str) -> str:
+    """Actionable error for Stooq's anti-bot block (gate page / access denied)."""
+    return (
+        f"Stooq blocked automated CSV download for {symbol} ({reason}). This is a "
+        "Stooq-side change: the CSV endpoint now requires an interactive browser "
+        "session, and the legacy STOOQ_API_KEY no longer changes this. See "
+        "README -> Troubleshooting (Stooq anti-bot block)."
+    )
+
+
 class StooqProvider:
     """Daily OHLCV via Stooq's CSV endpoint."""
 
@@ -130,8 +140,8 @@ class StooqProvider:
             "d2": effective_end.strftime("%Y%m%d"),
             "i": "d",
         }
-        if self._api_key:
-            params["apikey"] = self._api_key
+        # Stooq retired apikey-based CSV access behind a browser anti-bot gate
+        # (see _blocked_access_msg); sending `apikey` has no effect, so we don't.
 
         logger.debug("Stooq GET %s params=%s", self.BASE_URL, params)
         try:
@@ -148,19 +158,23 @@ class StooqProvider:
 
         lower = stripped.lower()
 
-        # Reject any response that is not a valid CSV.
-        # Stooq returns various non-CSV bodies depending on the error:
-        #   - API key instruction page (English or Polish)
-        #   - HTML error page
-        #   - PHP warning/error text
-        #   - "No data" / "Brak danych" plaintext
-        _API_KEY_MSG = (
-            f"Stooq requires an API key for {symbol}. "
-            "Obtain one at https://stooq.com/q/d/?s=pkn.pl&get_apikey "
-            "and set STOOQ_API_KEY in your .env file."
-        )
+        # Reject any response that is not a valid CSV. Stooq returns various
+        # non-CSV bodies depending on the error: the anti-bot gate / access
+        # denial, an API-key instruction page, an HTML error page, a PHP
+        # warning, or "No data" plaintext.
+
+        # Stooq's anti-bot protection: a JavaScript proof-of-work gate page, or a
+        # hard "Odmowa dostępu" (access denied) for non-browser clients. Both mean
+        # the CSV is unreachable without an interactive browser session.
+        if "__verify" in lower or "requires javascript" in lower:
+            raise ProviderError(_blocked_access_msg(symbol, "JavaScript anti-bot gate"))
+        if lower.startswith("odmowa dost"):
+            raise ProviderError(_blocked_access_msg(symbol, "access denied"))
+        # Legacy "you need an apikey" page — the apikey is now obsolete, so route
+        # it to the same browser-session guidance rather than telling users to
+        # fetch a key that no longer works.
         if lower.startswith("uzyskaj apikey") or lower.startswith("get your apikey"):
-            raise ProviderError(_API_KEY_MSG)
+            raise ProviderError(_blocked_access_msg(symbol, "API-key page"))
 
         first_line = stripped.splitlines()[0]
         first_lower = first_line.lower()

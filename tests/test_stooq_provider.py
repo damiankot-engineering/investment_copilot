@@ -24,6 +24,16 @@ CSV_INDEX_NO_VOLUME = (
     "2024-01-03,2155.0,2170.0,2150.0,2165.0\n"
 )
 
+# Stooq's JavaScript proof-of-work anti-bot gate page (returned with HTTP 200).
+POW_GATE = (
+    '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>'
+    "<noscript>This site requires JavaScript to verify your browser.</noscript>"
+    '<script>fetch("/__verify",{method:"POST",body:"c=...&n=1"})</script></body></html>'
+)
+
+# The hard access-denial Stooq serves to non-browser clients (HTTP 200, plaintext).
+ACCESS_DENIED = "Odmowa dostępu"
+
 
 def _fake_session(text: str, status_code: int = 200) -> MagicMock:
     response = MagicMock()
@@ -76,6 +86,20 @@ def test_fetch_html_error_raises() -> None:
     provider = StooqProvider(session=_fake_session("<html>oops</html>"))
     with pytest.raises(ProviderError):
         provider.fetch_ohlcv("XYZ", start=date(2024, 1, 1))
+
+
+def test_fetch_proof_of_work_gate_raises_actionable() -> None:
+    # Stooq's anti-bot gate must surface as a clear, actionable error — not a
+    # generic HTML/parse failure — so the user understands why refresh broke.
+    provider = StooqProvider(session=_fake_session(POW_GATE))
+    with pytest.raises(ProviderError, match="anti-bot gate"):
+        provider.fetch_ohlcv("cdr.pl", start=date(2024, 1, 1))
+
+
+def test_fetch_access_denied_raises_actionable() -> None:
+    provider = StooqProvider(session=_fake_session(ACCESS_DENIED))
+    with pytest.raises(ProviderError, match="access denied"):
+        provider.fetch_ohlcv("cdr.pl", start=date(2024, 1, 1))
 
 
 def test_fetch_empty_body_raises() -> None:
