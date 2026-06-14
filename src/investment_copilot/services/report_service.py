@@ -468,6 +468,7 @@ def _src_badge(source: str | None) -> str:
     src = source.replace("-", "_")
     label_map = {
         "biznesradar": "📊 BIZNESRADAR",
+        "yahoo": "YAHOO",
         "stooq": "STOOQ",
         "ohlcv_cache": "OHLCV CACHE",
         "empty": "BRAK DANYCH",

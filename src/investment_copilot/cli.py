@@ -366,7 +366,7 @@ _STARTER_CONFIG = """\
 # This file is UTF-8 (no BOM). When editing, save as UTF-8 (not UTF-16).
 
 providers:
-  market_data: stooq            # only "stooq" supported in v1
+  market_data: yahoo            # "yahoo" (default) or "stooq" (browser-gated)
   news: [stooq, rss]
   fundamentals: none
   rss_feeds:

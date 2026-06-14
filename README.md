@@ -13,7 +13,7 @@ Investment Copilot helps an intermediate-level GPW investor maintain a disciplin
 Designed to be:
 
 - **Modular** — ports-and-adapters layout, every external dependency lives behind a `Protocol` and is swappable in one file.
-- **Polish-market-first** — Stooq for OHLCV (full GPW history, free API key required), RSS feeds (Bankier, Money.pl) for news, WIG20 as the default benchmark.
+- **Polish-market-first** — Yahoo Finance for OHLCV (full GPW history, no API key), RSS feeds (Bankier, Money.pl) for news, WIG20 as the default benchmark.
 - **Three surfaces over one core** — CLI (Typer), Streamlit GUI, and a FastAPI + React web dashboard, all driving the same `ServiceContainer` + `Orchestrator`.
 
 ![Investment Copilot — Portfolio tab](docs/web-gui-screenshot.png)
@@ -43,9 +43,9 @@ uv sync && uv pip install -e ".[api]"
 # 2. Generate config files (UTF-8 safe on Windows)
 uv run invcopilot init
 
-# 3. Add API keys to .env — both are free
+# 3. Add your API key to .env — free tier is enough
 #    GROQ_API_KEY=...    (console.groq.com/keys)
-#    STOOQ_API_KEY=...   (stooq.pl/q/d/?s=pkn.pl&get_apikey)
+#    (market data uses Yahoo Finance — no key needed)
 
 # 4. Edit portfolio.yaml with your real holdings
 
@@ -65,9 +65,9 @@ For automation / cron, see [CLI usage](#cli-usage). For full setup details and o
 
 - **Portfolio tracking** — define holdings in `portfolio.yaml` as a list of **BUY/SELL transactions** (date, shares, price, optional fees + note) plus an investment thesis, optional name, news keywords, and an optional strategic `target_weight` used by the rebalancing engine. Current shares, **FIFO cost basis** (compatible with Polish PIT reporting), average entry price and **realized PnL** are all derived from the transaction history. Legacy single-entry files (`entry_price` / `shares` / `entry_date`) are auto-migrated to a one-BUY transaction on load — no manual migration step.
 - **Multi-portfolio** — keep several named portfolios as `portfolios/*.yaml` (filename stem = id; the configured `portfolio.yaml` is the `default`). A switcher in the dashboard top bar plus full create / rename / duplicate / delete (soft-delete to `.trash`) from the UI. Every portfolio-scoped API call carries `?portfolio=<id>`, resolved by a single dependency, so the whole backend is portfolio-aware. Each portfolio has an `account_type` (`standard` / `ike` / `ikze`) that drives tax treatment; the watchlist stays a single global list.
-- **Free, fast data** — daily OHLCV from Stooq for any GPW ticker (free API key required, see [API keys](#api-keys)). Indices (`wig20`, `mwig40`, etc.) and equities are queried through the same adapter.
+- **Free, fast data** — daily OHLCV from Yahoo Finance for any GPW ticker (no API key). Equities map to Warsaw `.WA` symbols; index benchmarks map to the matching GPW Beta ETF total-return tracker, all through the same adapter. Yahoo runs TLS-fingerprint bot detection (a plain HTTP client gets `429`ed), so the adapter fetches via `curl_cffi` impersonating Chrome. Stooq stays available as a fallback (`market_data: stooq`), but its CSV endpoint is currently behind a browser anti-bot gate — see [Troubleshooting](#troubleshooting).
 - **News aggregation** — multiple Polish RSS feeds plus best-effort scraping of Stooq's per-symbol news block. Persisted in SQLite, deduplicated by URL, queryable per ticker. A headline is attached to a company only when it **names the company in the title** — matching is on the company's **identity** (ticker stem + brand name from the display name) at **word boundaries**, not broad substring keywords. This keeps a brokerage like XTB from collecting every market story that merely quotes its analysts, and keeps thematic terms (`akcje`, `e-commerce`) from flooding a holding.
-- **Backtesting** — portfolio-level simulator with three strategies (MA-crossover, time-series momentum, buy & hold). Equal-weight across active sleeves, daily checks, end-of-day fills, no leverage, no shorts, zero transaction costs. Equity curve and a full metrics suite (total / annualized return, volatility, Sharpe @ 252, max drawdown with duration, win rate). Configurable benchmark (`wig20` / `mwig40` / `swig80` / `wig` / `wig30` / arbitrary Stooq ticker) buy-and-hold in the same window. The web Backtest tab **auto-runs on load** with the default config (Buy & Hold + the configured benchmark/window), failing silently to the empty state when data is missing.
+- **Backtesting** — portfolio-level simulator with three strategies (MA-crossover, time-series momentum, buy & hold). Equal-weight across active sleeves, daily checks, end-of-day fills, no leverage, no shorts, zero transaction costs. Equity curve and a full metrics suite (total / annualized return, volatility, Sharpe @ 252, max drawdown with duration, win rate). Configurable benchmark (`wig20` / `mwig40` / `swig80`, mapped to their GPW Beta ETF total-return trackers on Yahoo) buy-and-hold in the same window. The web Backtest tab **auto-runs on load** with the default config (Buy & Hold + the configured benchmark/window), failing silently to the empty state when data is missing.
 - **Rebalancing engine** — compute the BUY/SELL trades that move current weights toward a target allocation (per-holding `target_weight`, or equal-weight fallback), **self-financing within the current portfolio value**. Whole-share rounding (GPW), a drift band (no-trade zone), a min-trade filter, turnover, and a **FIFO realized-gain + Polish PIT (19%) tax preview** that is **zero for tax-exempt accounts (IKE/IKZE)**. The plan is read-only; an explicit **Zastosuj** appends the trades as transactions to the portfolio (with a `.bak` backup). Portfolio-scoped like everything else.
 - **Groq copilot** — three structured analyses with Polish output: portfolio summary, risk alerts, thesis update. JSON-mode + Pydantic validation, automatic self-correction on schema violations, exponential backoff on transient errors, fast-fail on auth errors.
 - **Grounded analysis** — quantitative metrics (HHI, top-3 concentration, per-holding 30/90/252d returns, distance from 52w high, annualized volatility, beta vs benchmark, top pairwise correlations) are computed in Python and injected into the prompt; the LLM cites specific `metric:KEY` / `news:N` / `fundamentals:TICKER.field` / `previous_report:LABEL` references; hallucinated citations are stripped Python-side before the result reaches the user. The last 2 Markdown reports are folded back in as RAG context so each run is framed as a delta over prior assessments.
@@ -247,7 +247,7 @@ investment-copilot/
 - Python **3.11** or 3.12
 - [`uv`](https://docs.astral.sh/uv/) (recommended) or plain `pip`
 - A [Groq API key](https://console.groq.com/keys) — free tier is sufficient
-- A [Stooq API key](https://stooq.pl/q/d/?s=pkn.pl&get_apikey) — free, obtained via one-time captcha
+- No key for market data — OHLCV comes from Yahoo Finance
 
 ### Install
 
@@ -290,7 +290,7 @@ cp config.example.yaml config.yaml
 cp portfolio.example.yaml portfolio.yaml
 cp .env.example .env
 
-# edit .env and set GROQ_API_KEY and STOOQ_API_KEY
+# edit .env and set GROQ_API_KEY (market data needs no key)
 # edit portfolio.yaml with your real holdings
 ```
 
@@ -308,9 +308,9 @@ If you do want to fix it manually:
 
 ### Network notes
 
-- **Stooq** requires a free API key (see [API keys](#api-keys) below). If you sit behind a strict outbound proxy, allow `stooq.com`.
+- **Yahoo Finance** (default OHLCV source) is reached at `query1.finance.yahoo.com` / `query2.finance.yahoo.com`; no API key. Behind a strict outbound proxy, allow those hosts.
 - **Groq** is reached at `api.groq.com`.
-- The Stooq adapter handles HTTP errors as `ProviderError`s — a single ticker failing never aborts the rest of the refresh.
+- The market-data adapter handles HTTP errors as `ProviderError`s — a single ticker failing never aborts the rest of the refresh. It fetches through `curl_cffi` (Chrome impersonation) to pass Yahoo's TLS-fingerprint bot detection, throttles the per-ticker fan-out, and retries any `429`/5xx with backoff across both query hosts.
 
 ### Run the tests
 
@@ -327,12 +327,12 @@ Investment Copilot resolves environment variables inside `config.yaml` using `${
 | Variable | Required | Used by |
 |---|---|---|
 | `GROQ_API_KEY` | yes | `llm.api_key` (Groq calls) |
-| `STOOQ_API_KEY` | no longer used | Stooq retired apikey CSV access behind a browser anti-bot gate (see [Troubleshooting](#troubleshooting)); the key is no longer sent. |
+| `STOOQ_API_KEY` | not used | Market data is now Yahoo Finance (no key). The legacy Stooq fallback's CSV endpoint is browser-gated, so this key has no effect (see [Troubleshooting](#troubleshooting)). |
 | `NEWSAPI_KEY` | no | optional NewsAPI provider (not enabled by default) |
 | `ALPHA_VANTAGE_KEY` | no | optional Alpha Vantage fundamentals (planned) |
 
 - **Groq key** — <https://console.groq.com/keys>. The free tier is generous enough for routine use.
-- **Stooq key** — historically required for the OHLCV CSV endpoint. Stooq has since put that endpoint behind a JavaScript anti-bot gate and denies automated downloads, so `STOOQ_API_KEY` no longer has any effect and is no longer sent (see [Troubleshooting](#troubleshooting)).
+- **Market data** — OHLCV comes from Yahoo Finance, which needs no key. `STOOQ_API_KEY` is obsolete: the legacy Stooq fallback's CSV endpoint is behind a JavaScript anti-bot gate that denies automated downloads, so the key has no effect (see [Troubleshooting](#troubleshooting)).
 
 If a referenced env var is missing **and** has no default, the CLI exits with a clear `error:` line and code `1` — the application never starts in a half-configured state.
 
@@ -344,7 +344,7 @@ If a referenced env var is missing **and** has no default, the CLI exits with a 
 # All sections are optional except `llm.api_key`; every key below shows its default.
 
 providers:
-  market_data: stooq                  # only "stooq" is supported
+  market_data: yahoo                  # "yahoo" (default) or "stooq" (browser-gated; see Troubleshooting)
   news:                               # ordered list; each provider is queried
     - stooq
     - rss
@@ -405,8 +405,8 @@ Unknown top-level keys are rejected at load time (typo-safe). Cross-field rules 
 base_currency: PLN
 account_type: standard                # standard (PIT 19%) | ike | ikze (tax-exempt)
 
-# Tickers are normalized to Stooq form: "PKN", "PKN.WA", and "pkn.pl" are
-# all equivalent and stored as "pkn.pl" internally.
+# Tickers are normalized internally: "PKN", "PKN.WA", and "pkn.pl" are all
+# equivalent and stored as "pkn.pl" (the Yahoo adapter maps that to "PKN.WA").
 #
 # Each holding is a list of BUY/SELL transactions. Current shares, FIFO
 # cost basis, average entry price and realized PnL are all DERIVED from
@@ -735,7 +735,7 @@ The API resolves config and portfolio paths from these env vars at startup (no f
 | `COPILOT_PORTFOLIO` | _(value in `config.yaml`)_ | API + CLI |
 | `COPILOT_WATCHLIST` | `watchlist.yaml` next to the default portfolio | API only |
 | `GROQ_API_KEY` | — (required for AI / monitoring) | LLM client |
-| `STOOQ_API_KEY` | — (no longer used; see [Troubleshooting](#troubleshooting)) | Stooq provider |
+| `STOOQ_API_KEY` | — (unused; market data is Yahoo, see [Troubleshooting](#troubleshooting)) | legacy Stooq fallback |
 
 ```bash
 # Multiple portfolios are first-class now: drop files into portfolios/<id>.yaml
@@ -825,7 +825,7 @@ curl -s -X POST 'http://localhost:8000/api/rebalance/plan?portfolio=default' \
 
 | Symptom | Cause / fix |
 |---|---|
-| Market-data refresh fails for every ticker with **"Stooq blocked automated CSV download"** (or cryptic 404s) | A Stooq-side change, not a bug. Stooq put its CSV download behind a **JavaScript proof-of-work anti-bot gate** and now denies non-browser clients (`Odmowa dostępu`) — even a headless browser with the gate solved and cookies set. The legacy `STOOQ_API_KEY` no longer helps and is no longer sent. The download still works in your normal browser; an automation-friendly OHLCV source (or a manual-CSV import path) is the way forward. The provider now reports this clearly instead of failing obscurely. |
+| Market-data refresh fails for every ticker | The default source is **Yahoo Finance** (no key), fetched via `curl_cffi` to pass Yahoo's TLS-fingerprint bot detection. Persistent **HTTP 429** usually means `curl_cffi` isn't installed/working (so requests fall back to a plain client Yahoo blocks) — run `uv sync` and confirm `curl_cffi` imports. If you switched to `market_data: stooq`, note Stooq's CSV endpoint is now behind a **JavaScript anti-bot gate** that denies automated downloads (`Odmowa dostępu`) regardless of `STOOQ_API_KEY` — switch back to `yahoo`. |
 | `/api/analysis` returns **502 LLM error** | `GROQ_API_KEY` missing or invalid. Set it in `.env`, restart uvicorn. The CLI errors out the same way. |
 | Backtest returns **400 "No OHLCV data available"** | Cache is empty. Click **Odśwież dane rynkowe** in the Portfolio tab (or `invcopilot update-data`) first. |
 | Equity curve shows wild values like **+30000%** | Stale uvicorn — adapter changes haven't loaded. Restart the process, or launch with `--reload`. |

@@ -30,7 +30,7 @@ def test_load_minimal_config_with_env_var(tmp_path, monkeypatch):
     assert isinstance(cfg, AppConfig)
     assert cfg.llm.api_key == "sk-test-123"
     # Defaults applied
-    assert cfg.providers.market_data == "stooq"
+    assert cfg.providers.market_data == "yahoo"
     assert cfg.backtest.benchmark == "wig20"
     assert cfg.llm.language == "pl"
 

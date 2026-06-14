@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field, PositiveFloat, PositiveInt, field_validat
 # --- Providers ---------------------------------------------------------------
 
 
-MarketDataProviderName = Literal["stooq"]
+MarketDataProviderName = Literal["yahoo", "stooq"]
 NewsProviderName = Literal["stooq", "rss", "newsapi"]
 FundamentalsProviderName = Literal["alpha_vantage", "none"]
 
@@ -25,7 +25,7 @@ FundamentalsProviderName = Literal["alpha_vantage", "none"]
 class ProvidersConfig(BaseModel):
     """Selects concrete data providers used by the data layer."""
 
-    market_data: MarketDataProviderName = "stooq"
+    market_data: MarketDataProviderName = "yahoo"
     news: list[NewsProviderName] = Field(default_factory=lambda: ["stooq", "rss"])
     fundamentals: FundamentalsProviderName = "none"
 

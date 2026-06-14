@@ -18,12 +18,15 @@ from investment_copilot.infrastructure.providers.base import (
 from investment_copilot.infrastructure.providers.rss import RSSProvider
 from investment_copilot.infrastructure.providers.stooq import StooqProvider
 from investment_copilot.infrastructure.providers.stooq_news import StooqNewsProvider
+from investment_copilot.infrastructure.providers.yahoo import YahooProvider
 
 logger = logging.getLogger(__name__)
 
 
 def build_market_provider(cfg: ProvidersConfig) -> MarketDataProvider:
     """Construct the market-data provider selected by config."""
+    if cfg.market_data == "yahoo":
+        return YahooProvider()
     if cfg.market_data == "stooq":
         return StooqProvider()
     raise ValueError(f"Unsupported market_data provider: {cfg.market_data!r}")

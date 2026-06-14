@@ -524,4 +524,4 @@ def test_init_creates_loadable_config(tmp_path: Path, monkeypatch) -> None:
 
     cfg = load_config(tmp_path / "config.yaml", env_file=None)
     assert cfg.llm.api_key == "sk-test"
-    assert cfg.providers.market_data == "stooq"
+    assert cfg.providers.market_data == "yahoo"

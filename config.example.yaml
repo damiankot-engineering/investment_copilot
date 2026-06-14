@@ -2,7 +2,7 @@
 # Copy to `config.yaml` and adjust. Real secrets live in `.env`.
 
 providers:
-  market_data: stooq            # only "stooq" supported in v1
+  market_data: yahoo            # "yahoo" (default) or "stooq" (browser-gated)
   news:                         # ordered list; each provider is queried
     - stooq
     - rss

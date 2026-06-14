@@ -12,6 +12,7 @@ from investment_copilot.infrastructure.providers import (
     RSSProvider,
     StooqNewsProvider,
     StooqProvider,
+    YahooProvider,
     build_market_provider,
     build_news_providers,
 )
@@ -33,10 +34,24 @@ def _write_config(tmp_path: Path, body: str) -> Path:
 # --- Provider builder tests -------------------------------------------------
 
 
-def test_build_market_provider_default_is_stooq(tmp_path, monkeypatch) -> None:
+def test_build_market_provider_default_is_yahoo(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("GROQ_API_KEY", "x")
     cfg = load_config(
         _write_config(tmp_path, "llm:\n  api_key: ${GROQ_API_KEY}\n"),
+        env_file=None,
+    )
+    provider = build_market_provider(cfg.providers)
+    assert isinstance(provider, YahooProvider)
+    assert provider.name == "yahoo"
+
+
+def test_build_market_provider_stooq_still_selectable(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GROQ_API_KEY", "x")
+    cfg = load_config(
+        _write_config(
+            tmp_path,
+            "llm:\n  api_key: ${GROQ_API_KEY}\nproviders:\n  market_data: stooq\n",
+        ),
         env_file=None,
     )
     provider = build_market_provider(cfg.providers)

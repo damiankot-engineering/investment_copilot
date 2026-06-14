@@ -18,6 +18,7 @@ from investment_copilot.infrastructure.providers.stooq_fundamentals import (
     StooqFundamentalsProvider,
 )
 from investment_copilot.infrastructure.providers.stooq_news import StooqNewsProvider
+from investment_copilot.infrastructure.providers.yahoo import YahooProvider
 
 __all__ = [
     "BiznesRadarProvider",
@@ -28,6 +29,7 @@ __all__ = [
     "StooqFundamentalsProvider",
     "StooqNewsProvider",
     "StooqProvider",
+    "YahooProvider",
     "build_market_provider",
     "build_news_providers",
 ]
